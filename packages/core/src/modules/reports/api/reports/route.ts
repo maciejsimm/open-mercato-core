@@ -13,6 +13,7 @@ const listQuerySchema = z
   .object({
     page: z.coerce.number().min(1).default(1),
     pageSize: z.coerce.number().min(1).max(100).default(50),
+    id: z.string().uuid().optional(),
     folderId: z.string().uuid().optional(),
     datasetId: z.string().optional(),
     type: z.enum(['flat_list', 'grouped', 'pivot', 'chart', 'summary']).optional(),
@@ -73,6 +74,7 @@ export async function GET(req: Request) {
   const parsed = listQuerySchema.safeParse({
     page: url.searchParams.get('page') ?? undefined,
     pageSize: url.searchParams.get('pageSize') ?? undefined,
+    id: url.searchParams.get('id') ?? undefined,
     folderId: url.searchParams.get('folderId') ?? undefined,
     datasetId: url.searchParams.get('datasetId') ?? undefined,
     type: url.searchParams.get('type') ?? undefined,
@@ -97,6 +99,7 @@ export async function GET(req: Request) {
     organizationId: auth.orgId ?? undefined,
     deletedAt: null,
   }
+  if (parsed.data.id) where.id = parsed.data.id
   if (parsed.data.folderId) where.folderId = parsed.data.folderId
   if (parsed.data.datasetId) where.datasetId = parsed.data.datasetId
   if (parsed.data.type) where.type = parsed.data.type
@@ -154,6 +157,9 @@ export async function GET(req: Request) {
         ownerUserId: r.ownerUserId,
         visibility: folder.kind,
         permission: perm,
+        definition: r.definitionJson ?? null,
+        parameters: r.parametersJson ?? [],
+        version: r.version,
         lastExecutedAt: r.lastExecutedAt?.toISOString() ?? null,
         createdAt: r.createdAt?.toISOString() ?? null,
         updatedAt: r.updatedAt?.toISOString() ?? null,

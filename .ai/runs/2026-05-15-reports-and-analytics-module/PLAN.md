@@ -30,7 +30,7 @@
 | 2 | 2.6 | Add `api/reports/[id]/run/route.ts` (sync flat_list run) | done | c41fa9d5d |
 | 2 | 2.7 | Wire `setup.ts seedDefaults` for Public root folder + lazy-create My Reports | done | 6e7f56c25 |
 | 2 | 2.8 | Backend pages: `/backend/reports/page.tsx` (folder navigator + DataTable) | done | f2afcc377 |
-| 2 | 2.9 | Backend pages: `/backend/reports/reports/new/page.tsx` + `[id]/page.tsx` (builder shell, flat-list only) | todo | — |
+| 2 | 2.9 | Backend pages: `/backend/reports/reports/new/page.tsx` + `[id]/page.tsx` (builder shell, flat-list only) | done | e229b917c |
 | 2 | 2.10 | Menu injection: `widgets/injection-table.ts` for main sidebar Reports entry | todo | — |
 | 3 | 3.1 | `lib/aggregator.ts` — in-memory group-by + pivot + measures + unit tests | todo | — |
 | 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | todo | — |
