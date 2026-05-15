@@ -28,7 +28,7 @@
 | 2 | 2.4 | Add `lib/folder-acl.ts` + unit tests for visibility/edit rules | done | fc0bf4664 |
 | 2 | 2.5 | Add CRUD routes: folders, folder-shares, reports (`makeCrudRoute`) | done | bf379914e |
 | 2 | 2.6 | Add `api/reports/[id]/run/route.ts` (sync flat_list run) | done | c41fa9d5d |
-| 2 | 2.7 | Wire `setup.ts seedDefaults` for Public root folder + lazy-create My Reports | done | pending |
+| 2 | 2.7 | Wire `setup.ts seedDefaults` for Public root folder + lazy-create My Reports | done | 6e7f56c25 |
 | 2 | 2.8 | Backend pages: `/backend/reports/page.tsx` (folder navigator + DataTable) | todo | — |
 | 2 | 2.9 | Backend pages: `/backend/reports/reports/new/page.tsx` + `[id]/page.tsx` (builder shell, flat-list only) | todo | — |
 | 2 | 2.10 | Menu injection: `widgets/injection-table.ts` for main sidebar Reports entry | todo | — |

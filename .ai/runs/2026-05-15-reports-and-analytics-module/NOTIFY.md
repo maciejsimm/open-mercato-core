@@ -52,3 +52,10 @@
 - Targeted validation passed: 125 reports unit tests across 8 suites (Phase 1: 80 + Phase 2 additions: 17 validators + 28 folder-acl). No new typecheck errors in modules/reports.
 - No UI Steps in this window → no Playwright/screenshots.
 - Decision: deferred undo handlers on commands to Phase 5 polish; the audit-log shape via buildLog is wired so the command log still reports each mutation. Async dispatch in the run route is a placeholder until Phase 4 wires the worker.
+
+## 2026-05-15T16:50:00Z — resume ended (still in-progress)
+- This resume shipped 6 Steps: 2.2 (validators), 2.4 (folder-acl), 2.3 (commands), 2.5 (CRUD routes), 2.6 (run route), 2.7 (seedDefaults + lazy My Reports root).
+- Cumulative: 17 code Steps across Phase 1 (10) and Phase 2 (7). Phase 2 remaining: 2.8, 2.9, 2.10 (all UI work).
+- Stop point chosen because the remaining Phase 2 Steps (folder navigator UI, builder shell UI, menu injection) need a runnable dev server for Playwright validation — UI work without a dev server cannot be safely written and shipped under the spec's QA contract.
+- 125 reports unit tests pass across 8 suites; stack-wide regressions checked (shared 248/248, cli 61/61). No typecheck errors in modules/reports.
+- Next session should resume at Step 2.8 with a runnable dev environment.
