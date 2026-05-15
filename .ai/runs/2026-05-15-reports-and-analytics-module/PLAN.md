@@ -26,8 +26,8 @@
 | 2 | 2.2 | Add zod validators in `data/validators.ts` (flat_list discriminator only) | done | e8e9e1a31 |
 | 2 | 2.3 | Add commands: folder.create/update/delete/share + report.create/update/delete/move | done | dd8128f69 |
 | 2 | 2.4 | Add `lib/folder-acl.ts` + unit tests for visibility/edit rules | done | fc0bf4664 |
-| 2 | 2.5 | Add CRUD routes: folders, folder-shares, reports (`makeCrudRoute`) | done | pending |
-| 2 | 2.6 | Add `api/reports/[id]/run/route.ts` (sync flat_list run) | todo | — |
+| 2 | 2.5 | Add CRUD routes: folders, folder-shares, reports (`makeCrudRoute`) | done | bf379914e |
+| 2 | 2.6 | Add `api/reports/[id]/run/route.ts` (sync flat_list run) | done | pending |
 | 2 | 2.7 | Wire `setup.ts seedDefaults` for Public root folder + lazy-create My Reports | todo | — |
 | 2 | 2.8 | Backend pages: `/backend/reports/page.tsx` (folder navigator + DataTable) | todo | — |
 | 2 | 2.9 | Backend pages: `/backend/reports/reports/new/page.tsx` + `[id]/page.tsx` (builder shell, flat-list only) | todo | — |
