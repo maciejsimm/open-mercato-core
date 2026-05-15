@@ -61,6 +61,37 @@ const crud = makeCrudRoute<CrudInput, CrudInput, Record<string, unknown>>({
   },
 })
 
+async function ensureMyReportsRoot(opts: {
+  em: EntityManager
+  userId: string
+  tenantId: string
+  organizationId: string | null
+}): Promise<void> {
+  if (!opts.organizationId) return
+  const existing = await opts.em.findOne(ReportFolder, {
+    tenantId: opts.tenantId,
+    organizationId: opts.organizationId,
+    parentFolderId: null,
+    kind: 'private',
+    ownerUserId: opts.userId,
+    deletedAt: null,
+  } as Record<string, unknown>)
+  if (existing) return
+  const folder = opts.em.create(ReportFolder, {
+    organizationId: opts.organizationId,
+    tenantId: opts.tenantId,
+    parentFolderId: null,
+    ownerUserId: opts.userId,
+    kind: 'private',
+    name: 'My Reports',
+    position: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  })
+  opts.em.persist(folder)
+  await opts.em.flush()
+}
+
 export async function GET(req: Request) {
   const auth = await getAuthFromRequest(req)
   if (!auth?.tenantId) {
@@ -87,6 +118,13 @@ export async function GET(req: Request) {
     organizationId: auth.orgId ?? null,
   })
   const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+
+  await ensureMyReportsRoot({
+    em,
+    userId: auth.sub,
+    tenantId: auth.tenantId,
+    organizationId: auth.orgId ?? null,
+  })
 
   const folders = await em.find(
     ReportFolder,
