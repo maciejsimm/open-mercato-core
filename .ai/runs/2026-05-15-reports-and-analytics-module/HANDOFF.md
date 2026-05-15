@@ -1,103 +1,81 @@
 # Handoff — 2026-05-15-reports-and-analytics-module
 
-**Last updated:** 2026-05-15T21:30:00Z
+**Last updated:** 2026-05-15T21:45:00Z
 **Branch:** feat/reports-and-analytics-module
 **PR:** not yet opened (gh CLI unavailable; user opens manually after pushing the branch)
-**Current phase/step:** Phase 2 + post-merge fixes complete — next is Phase 3 Step 3.1
-**Last commit:** 7f7b8aa30 — fix(core/reports): MikroORM v7 compatibility after main merge (Step 2.12-fix); the docs commit for PLAN/HANDOFF follows
-**Final status this resume:** in-progress — Phase 3 next (3.1 `lib/aggregator.ts`)
+**Current phase/step:** Phase 3 in progress — Steps 3.1, 3.2, 3.4 done; next is **Step 3.3 (Builder canvas UI)** or **Step 3.5 (`<ReportChart>` adapter)** depending on appetite
+**Last commit:** 527727c09 — checkpoint 5 follows in this resume's final commit
+**Final status this resume:** in-progress — phases 3.1/3.2/3.4 closed; spinner bug on `/backend/reports/<id>` deferred to Step 3.3 (which will rewrite that page)
 
 ## What just happened (this resume)
 
-User reported a 404 on the "New report" action: navigating to
-`/backend/reports/reports/new` returned **404 — This page could not be found**.
+The user reported two bugs from the running dev server:
+1. **404 on "New Report"** at `/backend/reports/reports/new` — root cause: backend page auto-discovery resolves `backend/<path>.tsx` → `/backend/<path>`, so the page at `backend/reports/new/page.tsx` is served from `/backend/reports/new`, not `/backend/reports/reports/new`. The list and new pages were linking to the file path instead of the real route.
+2. **Endless spinner on `/backend/reports/<id>`** — the user explicitly asked to "skip diagnosis and continue with the implementation", so the spinner is deferred. Step 3.3 will replace that page wholesale and almost certainly make the bug disappear.
 
-Root cause: backend page auto-discovery resolves `backend/<path>.tsx` →
-`/backend/<path>`, where `<path>` starts from inside the module's `backend/`
-directory regardless of the module name. So:
-
-- `backend/reports/new/page.tsx` → `/backend/reports/new` (not `/backend/reports/reports/new`)
-- `backend/reports/[id]/page.tsx` → `/backend/reports/[id]` (not `/backend/reports/reports/[id]`)
-
-The list page (`backend/page.tsx`) and the new-report page were both linking
-to the duplicate-prefix URL the page **file path** suggested, instead of the
-URL the generator actually produces. Every "Open / Open in new tab / row
-click / New report" action was broken.
+In parallel the working tree had two uncommitted MikroORM v7 fixes after the main merge (`@mikro-orm/decorators/legacy` for decorators + `em.remove(...).flush()` replacing `removeAndFlush`). Those landed as Step 2.12-fix.
 
 | Step | Commit | What |
 |------|--------|------|
-| 2.11-fix | 78b7d9071 | Fix `/backend/reports/*` URLs in `backend/page.tsx` (6 sites) and `backend/reports/new/page.tsx` (redirect after create) |
-| 2.12-fix | 7f7b8aa30 | MikroORM v7 compat after main merge: `data/entities.ts` decorators from `@mikro-orm/decorators/legacy`; `commands/folder.ts` replaces `em.removeAndFlush(share)` with `em.remove(share).flush()` |
+| 2.11-fix | 78b7d9071 | 7 wrong `/backend/reports/reports/*` URLs → `/backend/reports/*` |
+| 2.12-fix | 7f7b8aa30 | MikroORM v7 compat (decorators/legacy import + `em.remove(...).flush()`) |
+| 3.1 | 8005f6ed6 | `lib/aggregator.ts` — group-by + pivot + summary + 25 unit tests |
+| 3.2 | 5110a7bf2 | strict validators for `grouped` / `pivot` / `chart` / `summary` + 17 unit tests |
+| 3.4 | 697550a55 | `AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart` wrappers in `@open-mercato/ui/backend/charts/` |
 
-Sanity checks (not a full checkpoint — these are review-fix style steps):
+Checkpoint 5 (`checkpoint-5-checks.md`) covers all five steps. Targeted validation:
 
-- `yarn generate` — clean (10.3s)
-- `npx tsc -p packages/core/tsconfig.json --noEmit` — 0 errors in reports
-- Reports unit tests: 125/125 passing across 8 suites (same as checkpoint 4)
-
-The spec itself (line 891 of `.ai/specs/2026-05-15-reports-and-analytics-module.md`)
-already documents the detail URL as `/backend/reports/[id]` — the bug was in
-the page code, not in the URL convention.
+- `yarn generate` — clean (14s)
+- `tsc` (core reports + full ui) — 0 errors
+- Reports unit tests — 172/172 passing across 10 suites (+47 since checkpoint 4)
+- No i18n changes; no integration tests run (Step 3.3 will land the next testable UI surface).
 
 ## Next concrete action
 
-1. Restart `yarn dev` (or just let Turbopack hot-reload pick up the URL fix
-   and the v7 import change). After the restart, sign in as
-   `admin@acme.com` and verify the corrected smoke path below.
-2. Begin Phase 3 with Step **3.1 — `lib/aggregator.ts`** (in-memory group-by
-   + pivot + measures + unit tests). This is pure logic; no UI changes
-   needed until Step 3.3.
+Pick one of two:
 
-Corrected smoke path:
-- `/backend/reports` → sidebar entry, folder navigator (My Reports / Public /
-  Shared with me), reports DataTable empty state.
-- Click "New Report" → **`/backend/reports/new`** (no double-`reports/`)
-  → CrudForm with name/description/dataset/folder.
-- Pick `customers.people` dataset + Public folder → submit → redirect to
-  **`/backend/reports/<id>`**.
-- Builder shell: toggle fields → Save → Run → preview table renders rows
-  from `customers.people` (or empty state).
+**Option A — Step 3.3 (Builder canvas UI).** This is the biggest single step in Phase 3 (~800-1000 LOC). It rewrites `/backend/reports/<id>/page.tsx` with:
+- A type switcher (`flat_list` / `grouped` / `pivot` / `chart` / `summary`).
+- Drag-and-drop dataset field picker (uses `@dnd-kit/core` + `@dnd-kit/sortable`).
+- Per-type drop zones (fields / groupBy / measures / rows / cols / value / chart.x / chart.y).
+- Filters editor (typed by field kind, reusing the existing `AdvancedFilterBuilder` primitives).
+- Parameters declaration UI.
+- **Likely fixes the spinner bug as a side effect.**
 
-If the dev server still 404s after restart, run `yarn mercato configs
-cache structural --all-tenants` and then `yarn dev:reset && yarn dev` to
-clear Turbopack's stale chunks.
+**Option B — Step 3.5 (`<ReportChart>` adapter + `lib/chart-spec.ts`).** Smaller (~250 LOC). Switches on `chart.type` and renders the matching `@open-mercato/ui/backend/charts/*` wrapper. Useful for embedding in the eventual builder preview / dashboard tiles / record embeds. Unblocks 3.7+ and lets the builder's chart-type preview work the moment 3.3 lands.
 
-## Phase 3 plan (when resuming)
+A sensible order is **3.5 → 3.3**: deliver the small adapter first, then the large UI builds on top of it without scaffolding throwaway preview code.
 
-- 3.1 `lib/aggregator.ts` (in-memory group-by + pivot + measures + tests)
-- 3.2 Validators for `grouped`, `pivot`, `chart`, `summary`
-- 3.3 Builder canvas UI with `@dnd-kit`
-- 3.4 Missing chart wrappers in `packages/ui/src/backend/charts/`
-- 3.5 `lib/chart-spec.ts` + `<ReportChart>` adapter
-- 3.6 Export route (`api/reports/[id]/export/route.ts`)
-- 3.7 `ReportDashboard` entity + CRUD + dashboards backend pages
-- 3.8 Dashboards run route
-- 3.9 `ReportEmbed` entity + admin page
-- 3.10 Customers detail-page injection spots
-- 3.11 `record-embed-host` widget
+After either option, the next big UI verification gate is **the user reopens the dev server, navigates to an existing report at `/backend/reports/<id>`, and confirms (a) the builder loads and (b) the previous spinner bug is gone**.
+
+## Phase 3 plan (remaining)
+
+- **3.3** Builder canvas UI (deferred — biggest single step)
+- **3.5** `lib/chart-spec.ts` + `<ReportChart>` adapter
+- **3.6** Export route (`api/reports/[id]/export/route.ts`) + `lib/export.ts` (CSV + XLSX)
+- **3.7** `ReportDashboard` entity + CRUD + dashboards backend pages
+- **3.8** Dashboards run route (parallel tile execution)
+- **3.9** `ReportEmbed` entity + admin page
+- **3.10** Customers detail-page injection spots (`detail:customers.company:after-header`, `detail:customers.person:after-header`)
+- **3.11** `record-embed-host` widget
 
 ## Blockers / open questions
 
 - `gh` CLI still unavailable. PR creation, label normalization, and `auto-review-pr` autofix pass remain user actions after pushing the branch.
-- Remote push requires user credentials (last attempt: `Device not configured`).
+- Remote push requires user credentials (last attempt: `Device not configured`). Branch remains local.
+- Detail-page spinner on `/backend/reports/<id>` — known, deferred. Provisional theory: `useEffect` deps `[reportId, t]` re-fire faster than the load can resolve, with `setIsLoading(true)` at the start of every cycle. Fix candidate when we get back to it: drop `t` from the deps and access the latest translation via a ref. Step 3.3 will replace this page wholesale, which likely supersedes any direct fix.
 - MikroORM snapshot for the reports module is still not committed (carry-over from prior resume).
 
 ## Environment caveats
 
-- Dev runtime runnable: yes — the user's `yarn dev` is on this branch in
-  the primary worktree (we are NOT using `.ai/tmp/auto-create-pr/...`).
-- Playwright / browser checks: pending after restart. The fixes here are
-  small and verified by typecheck + unit tests; the user is asked to
-  manually confirm in the browser before Phase 3.
+- Dev runtime runnable: yes — the user's `yarn dev` is on this branch in the primary worktree (no isolated worktree per recorded preference).
+- The chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) and the aggregator/validators are pure additions; nothing in the running app exercises them yet, so the user does not need to verify them in browser. They will activate once Step 3.3 (builder) and Step 3.5 (`<ReportChart>`) land.
 
 ## Worktree
 
 - Path: `/Users/maciejsimm/Documents/Workspaces/Dainamite/open-mercato-core`
-- Created this run: no — work continues in the primary checkout per the
-  recorded user preference (no isolated worktrees for auto-* skills).
+- Primary checkout — no isolated worktree (per the recorded user preference for auto-* skills in this repo).
 
 ## Resume instructions
 
-After the user confirms the browser smoke (or implicitly by asking to
-continue), resume with `/auto-continue-pr-loop` to start Phase 3 from
-Step 3.1.
+Re-enter with `/auto-continue-pr-loop` to pick up from Step 3.3 (builder canvas UI) or Step 3.5 (`<ReportChart>` adapter). If you want to do 3.5 first, say so explicitly — the PLAN's Tasks-table first-todo points at 3.3, but 3.5 is well-isolated and a sensible interlude before 3.3.

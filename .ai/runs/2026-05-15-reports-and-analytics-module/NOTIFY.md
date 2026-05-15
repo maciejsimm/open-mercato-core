@@ -91,3 +91,11 @@
 - Steps shipped this resume: 2.11-fix (78b7d9071) URL routing, 2.12-fix (7f7b8aa30) MikroORM v7 compat. Total commits in this resume: 2 code + 1 docs.
 - Decision: do NOT auto-continue Phase 3.1 in the same response — the user is actively verifying the fix in their browser and asked specifically about the creation flow. Pause after the fix lands, surface the corrected smoke path, and let the user trigger Phase 3 once they have confirmed the UI is unblocked.
 - Worktree: primary checkout (per recorded user preference — no `.ai/tmp/auto-create-pr/...` isolation).
+
+## 2026-05-15T21:45:00Z — checkpoint 5 — Phase 3 logic foundations + chart wrappers
+- Steps covered: 2.11-fix (78b7d9071), 2.12-fix (7f7b8aa30), 3.1 (8005f6ed6), 3.2 (5110a7bf2), 3.4 (697550a55).
+- Touched packages: @open-mercato/core (reports module — URL fix, MikroORM v7 compat, aggregator, validators) and @open-mercato/ui (new chart wrappers).
+- Targeted validation: tsc clean (core reports + full ui), reports unit tests 172/172 across 10 suites, yarn generate clean.
+- UI verification: skipped at this checkpoint. The user already verified the URL fix manually (created a report). The detail-page spinner is deferred to Step 3.3 which will rewrite that page entirely. The new chart wrappers and pure-logic libs have no UI surface to exercise until Step 3.5 (`<ReportChart>` adapter) lands.
+- Decision: Step 3.3 (builder canvas UI) skipped from this resume on purpose — it is the single largest step in Phase 3 (~800-1000 LOC). Resume HANDOFF offers two paths: continue with 3.3 (big) or interlude through 3.5 (small) first.
+- Bug-deferral note: the endless-spinner bug on `/backend/reports/<id>` is documented in HANDOFF with a provisional fix theory (drop `t` from the load `useEffect` deps and use a ref). It is left unfixed because Step 3.3 will rewrite that page wholesale.
