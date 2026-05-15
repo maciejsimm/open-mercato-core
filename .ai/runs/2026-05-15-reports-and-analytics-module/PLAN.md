@@ -32,6 +32,8 @@
 | 2 | 2.8 | Backend pages: `/backend/reports/page.tsx` (folder navigator + DataTable) | done | f2afcc377 |
 | 2 | 2.9 | Backend pages: `/backend/reports/reports/new/page.tsx` + `[id]/page.tsx` (builder shell, flat-list only) | done | e229b917c |
 | 2 | 2.10 | Menu injection: `widgets/injection-table.ts` for main sidebar Reports entry | done | ca337e05d |
+| 2 | 2.11-fix | Fix `/backend/reports/*` URLs in list + new pages (auto-discovery collapses duplicate prefix) | done | 78b7d9071 |
+| 2 | 2.12-fix | MikroORM v7 compatibility (decorators/legacy import + `em.remove(...).flush()`) after main merge | done | 7f7b8aa30 |
 | 3 | 3.1 | `lib/aggregator.ts` — in-memory group-by + pivot + measures + unit tests | todo | — |
 | 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | todo | — |
 | 3 | 3.3 | Builder canvas UI — type switcher, drag-and-drop fields (uses `@dnd-kit`) | todo | — |

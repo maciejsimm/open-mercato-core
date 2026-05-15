@@ -1,48 +1,66 @@
 # Handoff — 2026-05-15-reports-and-analytics-module
 
-**Last updated:** 2026-05-15T20:30:00Z
+**Last updated:** 2026-05-15T21:30:00Z
 **Branch:** feat/reports-and-analytics-module
 **PR:** not yet opened (gh CLI unavailable; user opens manually after pushing the branch)
-**Current phase/step:** Phase 2 complete — next is Phase 3 Step 3.1
-**Last commit:** dd0f9bc24 — feat(core/reports): widgets/injection-table.ts placeholder for Phase 3 hooks (Step 2.10 amend); the checkpoint commit follows in this resume's final push
-**Final status this resume:** in-progress — Phase 2 closed; Phase 3 begins after user verifies the UI smoke
+**Current phase/step:** Phase 2 + post-merge fixes complete — next is Phase 3 Step 3.1
+**Last commit:** 7f7b8aa30 — fix(core/reports): MikroORM v7 compatibility after main merge (Step 2.12-fix); the docs commit for PLAN/HANDOFF follows
+**Final status this resume:** in-progress — Phase 3 next (3.1 `lib/aggregator.ts`)
 
 ## What just happened (this resume)
 
-This auto-continue-pr-loop resume drove Phase 2 to completion (Steps 2.8–2.10):
+User reported a 404 on the "New report" action: navigating to
+`/backend/reports/reports/new` returned **404 — This page could not be found**.
+
+Root cause: backend page auto-discovery resolves `backend/<path>.tsx` →
+`/backend/<path>`, where `<path>` starts from inside the module's `backend/`
+directory regardless of the module name. So:
+
+- `backend/reports/new/page.tsx` → `/backend/reports/new` (not `/backend/reports/reports/new`)
+- `backend/reports/[id]/page.tsx` → `/backend/reports/[id]` (not `/backend/reports/reports/[id]`)
+
+The list page (`backend/page.tsx`) and the new-report page were both linking
+to the duplicate-prefix URL the page **file path** suggested, instead of the
+URL the generator actually produces. Every "Open / Open in new tab / row
+click / New report" action was broken.
 
 | Step | Commit | What |
 |------|--------|------|
-| 2.8 | 774e2160f | `backend/page.tsx` folder navigator + reports DataTable + `page.meta.ts` for sidebar nav, reports module enabled in `apps/mercato/src/modules.ts`, folder API enriched with `ownedByViewer`, i18n bundle seeded for 4 locales |
-| 2.9 | 35cff212d | `backend/reports/new/page.tsx` + `[id]/page.tsx` builder shell (flat-list only), `/api/reports/reports` list endpoint extended with `id` filter + `definition`/`parameters`/`version` in response, detail/builder i18n keys added |
-| 2.10 | dd0f9bc24 | `widgets/injection-table.ts` placeholder (empty mapping) — sidebar entry is delivered by `page.meta.ts` auto-nav, real widget injections (record-embed-host, dashboards menu) ship in Phase 3 |
+| 2.11-fix | 78b7d9071 | Fix `/backend/reports/*` URLs in `backend/page.tsx` (6 sites) and `backend/reports/new/page.tsx` (redirect after create) |
+| 2.12-fix | 7f7b8aa30 | MikroORM v7 compat after main merge: `data/entities.ts` decorators from `@mikro-orm/decorators/legacy`; `commands/folder.ts` replaces `em.removeAndFlush(share)` with `em.remove(share).flush()` |
 
-Checkpoint 4 covers Steps 2.8..2.10. `checkpoint-4-checks.md` captures the targeted validation:
-- Typecheck filtered to `packages/core/src/modules/reports/**` — 0 errors.
-- Reports unit tests: 125/125 passing across 8 suites (Phase 1: 80 + Phase 2 additions: 17 validators + 28 folder-acl).
-- @open-mercato/shared: 248/248 tests passing.
-- i18n auto-sorted across en/pl/de/es (sort-only reformat — no key content changed).
-- i18n usage clean for `reports.*` (0 missing, 0 unused in this namespace).
+Sanity checks (not a full checkpoint — these are review-fix style steps):
 
-UI verification skipped — the dev server at `localhost:3010` is running from the user's **primary worktree** (`main` branch), not this branch's worktree. The skill rule "UI checks MUST NEVER block development" applies; Playwright + screenshots will be captured on the next resume after the user runs the regen + restart steps below.
+- `yarn generate` — clean (10.3s)
+- `npx tsc -p packages/core/tsconfig.json --noEmit` — 0 errors in reports
+- Reports unit tests: 125/125 passing across 8 suites (same as checkpoint 4)
 
-Cumulative: **20 code Steps shipped** across Phase 1 (1.1–1.10) and Phase 2 (2.1–2.10). The safety-stop threshold (20 Steps) is reached for this resume.
+The spec itself (line 891 of `.ai/specs/2026-05-15-reports-and-analytics-module.md`)
+already documents the detail URL as `/backend/reports/[id]` — the bug was in
+the page code, not in the URL convention.
 
 ## Next concrete action
 
-Before resuming, **user must**:
+1. Restart `yarn dev` (or just let Turbopack hot-reload pick up the URL fix
+   and the v7 import change). After the restart, sign in as
+   `admin@acme.com` and verify the corrected smoke path below.
+2. Begin Phase 3 with Step **3.1 — `lib/aggregator.ts`** (in-memory group-by
+   + pivot + measures + unit tests). This is pure logic; no UI changes
+   needed until Step 3.3.
 
-1. `yarn db:migrate` — apply `Migration20260515182452.ts` so the `reports_*` tables exist (Step 2.1 hand-wrote the migration; the DB has not been updated yet).
-2. `yarn db:generate` once after the migration applies — writes `packages/core/src/modules/reports/migrations/.snapshot-open-mercato.json`. Discard any unrelated migration files the generator emits; commit only the snapshot.
-3. `yarn generate` — rebuild generated registries so the new module, ACL features, events, datasets, backend pages, API routes, and i18n bundles are picked up.
-4. `yarn mercato configs cache structural --all-tenants` — purge `nav:*` Redis keys and bump generated-file mtimes so Turbopack re-evaluates.
-5. Restart `yarn dev` (or `yarn dev:reset && yarn dev` if Turbopack serves stale chunks).
+Corrected smoke path:
+- `/backend/reports` → sidebar entry, folder navigator (My Reports / Public /
+  Shared with me), reports DataTable empty state.
+- Click "New Report" → **`/backend/reports/new`** (no double-`reports/`)
+  → CrudForm with name/description/dataset/folder.
+- Pick `customers.people` dataset + Public folder → submit → redirect to
+  **`/backend/reports/<id>`**.
+- Builder shell: toggle fields → Save → Run → preview table renders rows
+  from `customers.people` (or empty state).
 
-After that, sign in as `admin@acme.com` and verify the smoke path:
-- `/backend/reports` should show the **Reports** sidebar entry (icon, group), the folder navigator with "My Reports" / "Public" / "Shared with me", and the reports DataTable with an empty state.
-- Click "New Report" → `/backend/reports/reports/new` → CrudForm with name/description/dataset/folder.
-- Pick the `customers.people` dataset and the Public folder → submit → redirect to `/backend/reports/reports/[id]`.
-- Builder shell: toggle a couple of fields → Save → Run → preview table renders rows from `customers.people` (or empty state if there are no people in the tenant).
+If the dev server still 404s after restart, run `yarn mercato configs
+cache structural --all-tenants` and then `yarn dev:reset && yarn dev` to
+clear Turbopack's stale chunks.
 
 ## Phase 3 plan (when resuming)
 
@@ -62,21 +80,24 @@ After that, sign in as `admin@acme.com` and verify the smoke path:
 
 - `gh` CLI still unavailable. PR creation, label normalization, and `auto-review-pr` autofix pass remain user actions after pushing the branch.
 - Remote push requires user credentials (last attempt: `Device not configured`).
-- MikroORM snapshot for the reports module is still not committed.
-- The dev server at `localhost:3010` is on the primary worktree (currently `main`), so this branch's reports module is invisible there until the user pulls/checks out and re-generates.
+- MikroORM snapshot for the reports module is still not committed (carry-over from prior resume).
 
 ## Environment caveats
 
-- Dev runtime runnable: yes, but on the wrong branch in the primary worktree — see "Next concrete action".
-- Playwright / browser checks: deferred to next resume after dev server is on this branch.
-- Database/migration state: migration exists on disk but is unapplied.
+- Dev runtime runnable: yes — the user's `yarn dev` is on this branch in
+  the primary worktree (we are NOT using `.ai/tmp/auto-create-pr/...`).
+- Playwright / browser checks: pending after restart. The fixes here are
+  small and verified by typecheck + unit tests; the user is asked to
+  manually confirm in the browser before Phase 3.
 
 ## Worktree
 
-- Path: `/Users/maciejsimm/Documents/Workspaces/Dainamite/open-mercato-core/.ai/tmp/auto-create-pr/reports-and-analytics-module-20260515-174726`
-- Created this run: no (reused from the previous auto-continue-pr-loop session)
-- Cleanup: pending — leave in place to continue future resumes from here, or `git worktree remove --force <path>` after merging.
+- Path: `/Users/maciejsimm/Documents/Workspaces/Dainamite/open-mercato-core`
+- Created this run: no — work continues in the primary checkout per the
+  recorded user preference (no isolated worktrees for auto-* skills).
 
 ## Resume instructions
 
-After the user runs the regen steps and confirms the smoke path, resume with `/auto-continue-pr-loop` (or equivalent) to start Phase 3 from Step 3.1. The 20-Step safety threshold has been reached for this resume, so the next session begins fresh.
+After the user confirms the browser smoke (or implicitly by asking to
+continue), resume with `/auto-continue-pr-loop` to start Phase 3 from
+Step 3.1.

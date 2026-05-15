@@ -81,3 +81,13 @@
 - This resume shipped 3 Steps: 2.8, 2.9, 2.10 — Phase 2 is functionally complete.
 - Stop point chosen because: (a) the 20-Step safety threshold has been reached, (b) the user wants to regen + restart dev before continuing so the UI smoke can run on the next resume, (c) Phase 3 begins a large new scope (full builder canvas + dashboards + embeds) that warrants a fresh session.
 - Next session should resume at Phase 3 Step 3.1 (`lib/aggregator.ts`) once the user confirms the smoke path on `localhost:3010` from this branch.
+
+## 2026-05-15T21:30:00Z — auto-continue-pr-loop resume
+- Resumed by: @maciejsimm (via Claude Code with Opus 4.7)
+- Resume point: Phase 2 review-fix (NOT Phase 3.1 yet) — user reported a 404 on "New report" in the running dev server.
+- PR head SHA on entry: 92a72f243 (merge of origin/main into the branch).
+- Bug diagnosis: backend page auto-discovery resolves `backend/<path>.tsx` → `/backend/<path>`. The list and new-report pages were linking to `/backend/reports/reports/*` (the file path) instead of the real route `/backend/reports/*`.
+- Working tree had two uncommitted MikroORM v7 fixes from the main merge (`@mikro-orm/decorators/legacy` import + `em.remove(...).flush()`). Committed as a separate review-fix step.
+- Steps shipped this resume: 2.11-fix (78b7d9071) URL routing, 2.12-fix (7f7b8aa30) MikroORM v7 compat. Total commits in this resume: 2 code + 1 docs.
+- Decision: do NOT auto-continue Phase 3.1 in the same response — the user is actively verifying the fix in their browser and asked specifically about the creation flow. Pause after the fix lands, surface the corrected smoke path, and let the user trigger Phase 3 once they have confirmed the UI is unblocked.
+- Worktree: primary checkout (per recorded user preference — no `.ai/tmp/auto-create-pr/...` isolation).
