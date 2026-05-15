@@ -19,8 +19,8 @@
 | 1 | 1.5 | Build `lib/parameters.ts` + `lib/date-ranges.ts` + unit tests | done | 0b26a1c5a |
 | 1 | 1.6 | Build `lib/datasets-registry.ts` (runtime view over generated registry) + tests | done | 64acc614f |
 | 1 | 1.7 | Build `lib/query-translator.ts` for `flat_list` definitions + unit tests | done | 5d7baf1bc |
-| 1 | 1.8 | Build `lib/execute.ts` orchestrator (sync flat_list path) + unit tests | done | pending |
-| 1 | 1.9 | Add datasets API: `api/datasets/route.ts` + `api/datasets/[id]/route.ts` | todo | — |
+| 1 | 1.8 | Build `lib/execute.ts` orchestrator (sync flat_list path) + unit tests | done | 2e403ab6a |
+| 1 | 1.9 | Add datasets API: `api/datasets/route.ts` + `api/datasets/[id]/route.ts` | done | pending |
 | 1 | 1.10 | Seed `customers/reports.ts` (people dataset) — canonical example | todo | — |
 | 2 | 2.1 | Add ORM entities: `Report`, `ReportFolder`, `ReportFolderShare` | todo | — |
 | 2 | 2.2 | Add zod validators in `data/validators.ts` (flat_list discriminator only) | todo | — |
