@@ -45,3 +45,10 @@
 - Reason for local-only resume: gh CLI still unavailable; treating the run as a continuation of auto-create-pr-loop. PR creation, label normalization, and auto-review-pr autofix pass remain user actions.
 - Goal of this resume: drive Phase 2 data-layer Steps (2.2 validators → 2.7 setup defaults) that do not require a live DB or running dev server. UI Steps 2.8–2.10 will stay todo until a session with a runnable dev environment.
 - 11 code Steps already landed before this resume; safety stop at 20 Steps means at most 9 more Steps. Realistic target this resume: 2.2..2.7 (6 Steps).
+
+## 2026-05-15T16:42:00Z — checkpoint 3 — Phase 2 data + API layer
+- Steps covered: 2.2..2.6 (commits e8e9e1a31..c41fa9d5d).
+- Touched package: @open-mercato/core.
+- Targeted validation passed: 125 reports unit tests across 8 suites (Phase 1: 80 + Phase 2 additions: 17 validators + 28 folder-acl). No new typecheck errors in modules/reports.
+- No UI Steps in this window → no Playwright/screenshots.
+- Decision: deferred undo handlers on commands to Phase 5 polish; the audit-log shape via buildLog is wired so the command log still reports each mutation. Async dispatch in the run route is a placeholder until Phase 4 wires the worker.

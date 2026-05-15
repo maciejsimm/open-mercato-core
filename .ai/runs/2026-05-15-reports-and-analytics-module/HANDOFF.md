@@ -1,57 +1,47 @@
 # Handoff — 2026-05-15-reports-and-analytics-module
 
-**Last updated:** 2026-05-15T19:10:00Z
+**Last updated:** 2026-05-15T16:42:00Z
 **Branch:** feat/reports-and-analytics-module
 **PR:** not yet opened (gh CLI unavailable; user opens manually after pushing the branch)
-**Current phase/step:** Phase 2 Step 2.2 (next)
-**Last commit:** 075e2012c — feat(core/reports): ORM entities + initial migration
-**Final status this session:** in-progress — resume via `auto-continue-pr-loop`
+**Current phase/step:** Phase 2 Step 2.7 (next)
+**Last commit:** c41fa9d5d — feat(core/reports): POST /api/reports/reports/[id]/run
 
-## What just happened (this session)
+## What just happened (this resume)
 
-Phase 1 (Steps 1.1–1.10) is fully complete and tested:
-- Dataset DSL (`packages/shared/src/modules/reports/dsl.ts`).
-- CLI generator extension emitting `reports-datasets.generated.ts`.
-- Reports module skeleton (`index.ts`, `acl.ts`, `setup.ts`, `events.ts`, `translations.ts`).
-- Three-point field-ACL enforcement (`lib/field-redact.ts`).
-- 12 date-range tokens (`lib/date-ranges.ts`).
-- Parameter resolver + filter binding (`lib/parameters.ts`).
-- Datasets registry (`lib/datasets-registry.ts`).
-- Flat-list query translator (`lib/query-translator.ts`).
-- Sync execution orchestrator + async dispatch helper (`lib/execute.ts`).
-- Datasets API (`GET /api/reports/datasets` and `[id]`).
-- `customers.entities` canonical dataset.
+Phase 2 data + API layer complete (Steps 2.2–2.6):
+- zod validators (flat_list arm full; grouped/pivot/chart/summary placeholders pending Phase 3 aggregator).
+- 9 command handlers wired via `registerCommand` (folder + folder-share + report mutations).
+- folder-acl resolution library with 28 predicates over visibility, edit, share, and artifact-owner override.
+- CRUD routes for folders, folder-shares, reports — all custom GET handlers stamp the caller's effective `permission`.
+- POST /api/reports/reports/[id]/run wires the Phase 1 executeFlatList orchestrator to HTTP, refusing non-flat_list types with 501 until Phase 3.
 
-Phase 2 partial:
-- Step 2.1 — ORM entities + initial migration committed. See snapshot caveat below.
-
-Total: **11 code Steps**, **6 reports test suites / 80 passing tests** in core, generator tests still green.
+Test totals: 125 reports unit tests across 8 suites (Phase 1's 80 plus Phase 2's validators 17 + folder-acl 28).
 
 ## Next concrete action
 
-- Step 2.2 — `data/validators.ts` with zod schemas for `Report`, `ReportFolder`, `ReportFolderShare`. Use the `defineDataset` types and the `ReportDefinition` discriminated union; start with only the `flat_list` discriminator arm and add the remaining variants when Phase 3 begins.
+Step 2.7 — `setup.ts seedDefaults` wires a per-org "Public" root folder, and the folder list API lazily creates the per-user "My Reports" private root on first access. After 2.7 land, the next session can pick up UI Steps 2.8–2.10 with a runnable dev environment.
 
 ## Blockers / open questions
 
-- `gh` CLI not installed. PR creation, label normalization, claim-comment, and `auto-review-pr` autofix pass were skipped this session. The user opens the PR manually after pushing the branch. Suggested PR title: `feat(core/reports): foundation — dataset DSL, generator, field-ACL, flat-list execute`.
-- Remote push needs credentials (`git push -u origin feat/reports-and-analytics-module` returned `Device not configured`). The branch is local-only until the user pushes.
-- **MikroORM snapshot** for the new module is **not committed**. `Migration20260515182452.ts` will apply cleanly on first `yarn db:migrate`, but the next `yarn db:generate` run will produce a stale diff until the snapshot is captured. After the migration applies, run `yarn db:generate` once — it should produce a no-op migration plus the snapshot file `packages/core/src/modules/reports/migrations/.snapshot-open-mercato.json`. Commit that snapshot under a follow-up commit; do not commit the no-op migration.
+- `gh` CLI still unavailable; PR opening / labels / `auto-review-pr` remain user actions.
+- Branch push still requires user credentials.
+- MikroORM snapshot for the reports module is still un-captured. Run `yarn db:generate` once after `yarn db:migrate` applies the new migration to capture `packages/core/src/modules/reports/migrations/.snapshot-open-mercato.json`. Commit that snapshot under a follow-up commit; discard any no-op migration the generator emits.
 
 ## Environment caveats
 
-- Dev runtime runnable: not exercised this session. Phase 2 UI Steps (2.8–2.10) will need it; Playwright should run when those Steps land.
-- Database/migration state: clean. The new migration has not been applied yet anywhere; it is fresh-on-disk only.
-- Pre-existing `#generated/entities.ids.generated` typecheck errors on `develop` are not introduced by this branch — they resolve when `yarn generate` runs in the `@open-mercato/app` workspace.
+- Dev runtime runnable: unknown — UI Steps 2.8–2.9 will need it.
+- Playwright / browser checks: not run yet.
+- Database/migration state: the new migration is on disk but unapplied; the entities + commands + routes will only function once `yarn db:migrate` has run.
 
 ## Worktree
 
 - Path: `/Users/maciejsimm/Documents/Workspaces/Dainamite/open-mercato-core/.ai/tmp/auto-create-pr/reports-and-analytics-module-20260515-174726`
 - Created this run: yes
-- Cleanup: pending — leave in place so the user can push from this worktree, or remove with `git worktree remove --force <path>` after merging.
+- Cleanup: pending — leave in place for the next push or resume.
 
 ## Resume instructions
 
-To continue this run, either:
+This branch lives only on local disk. Two paths to continue:
 
-1. Push the branch (`git push -u origin feat/reports-and-analytics-module`), open the PR manually via the GitHub web UI, then run `/auto-continue-pr-loop <PR-number>`.
-2. Or pick the work up locally: `cd <worktree>`, then start Step 2.2 using `data/validators.ts` patterns from existing modules (e.g. `packages/core/src/modules/customers/data/validators.ts`).
+1. Push then open the PR manually (`git push -u origin feat/reports-and-analytics-module`, then create the PR via the GitHub web UI), then run `/auto-continue-pr-loop <PR-number>`.
+2. Or continue locally: `cd <worktree>` and start Step 2.7 directly. After 2.7 lands, UI Steps 2.8–2.10 need a runnable dev server (`yarn dev`) before being attempted.
