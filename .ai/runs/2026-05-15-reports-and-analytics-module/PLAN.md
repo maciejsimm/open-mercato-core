@@ -51,7 +51,7 @@
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands + render endpoint (admin page deferred to 3.9b) | done | 5ac77f4af |
 | 3 | 3.9b | Embeds admin page (`/backend/reports/embeds`) — defer | todo | — |
 | 3 | 3.10 | Expose `detail:customers.company:after-header` and `detail:customers.person:after-header` injection spots | done | 369ddf0ef |
-| 3 | 3.11 | `record-embed-host` widget against `crud-form:*:fields` + `detail:*:after-header` | todo | — |
+| 3 | 3.11 | `record-embed-host` widget registered on `detail:customers.{person,company}:after-header` | done | 5cc28de8f |
 | 4 | 4.1 | `ReportSchedule` entity + CRUD + commands | todo | — |
 | 4 | 4.2 | Workers: `reports-schedule-runner`, `reports-schedule-execute`, `reports-async-execute`, `reports-export-build` | todo | — |
 | 4 | 4.3 | `lib/email-attachments.ts` + `ScheduledReportEmail` React template | todo | — |
