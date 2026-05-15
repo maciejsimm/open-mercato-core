@@ -43,7 +43,8 @@
 | 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | done | 697550a55 |
 | 3 | 3.5 | `lib/chart-spec.ts` + `<ReportChart>` adapter | done | bd0838eef |
 | 3 | 3.5b | Extend `lib/execute.ts` to dispatch grouped/pivot/chart/summary through the aggregator; run route supports all types | done | 400bf8a79 |
-| 3 | 3.6 | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + XLSX) | todo | — |
+| 3 | 3.6a | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + JSON + XML + Markdown via shared serializer) | done | ac4606075 |
+| 3 | 3.6b | XLSX export support (adds `exceljs` dependency) | todo | — |
 | 3 | 3.7 | `ReportDashboard` entity + CRUD + commands; `/backend/reports/dashboards/*` | todo | — |
 | 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | todo | — |
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands; admin page `/backend/reports/embeds` | todo | — |

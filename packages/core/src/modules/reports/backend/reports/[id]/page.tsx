@@ -12,7 +12,7 @@ import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
-import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical } from 'lucide-react'
+import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical, Download } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { ReportChart } from '../../../widgets/ReportChart'
 import {
@@ -707,6 +707,13 @@ type BuilderHeaderProps = {
   t: ReturnType<typeof useT>
 }
 
+const EXPORT_FORMATS: Array<{ value: 'csv' | 'json' | 'xml' | 'markdown'; labelKey: string; fallback: string }> = [
+  { value: 'csv', labelKey: 'reports.detail.actions.exportCsv', fallback: 'Export CSV' },
+  { value: 'json', labelKey: 'reports.detail.actions.exportJson', fallback: 'Export JSON' },
+  { value: 'xml', labelKey: 'reports.detail.actions.exportXml', fallback: 'Export XML' },
+  { value: 'markdown', labelKey: 'reports.detail.actions.exportMarkdown', fallback: 'Export Markdown' },
+]
+
 function BuilderHeader({
   report,
   canEdit,
@@ -718,6 +725,18 @@ function BuilderHeader({
   onDelete,
   t,
 }: BuilderHeaderProps) {
+  const [exportOpen, setExportOpen] = React.useState(false)
+  const exportRef = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!exportOpen) return
+    function onDocClick(event: MouseEvent) {
+      const node = exportRef.current
+      if (node && event.target instanceof Node && !node.contains(event.target)) setExportOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [exportOpen])
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3">
@@ -741,6 +760,37 @@ function BuilderHeader({
           <Play className="size-4" aria-hidden />
           <span>{isRunning ? t('reports.detail.actions.running', 'Running…') : t('reports.detail.actions.run', 'Run')}</span>
         </Button>
+        <div className="relative" ref={exportRef}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setExportOpen((prev) => !prev)}
+            aria-expanded={exportOpen}
+          >
+            <Download className="size-4" aria-hidden />
+            <span>{t('reports.detail.actions.export', 'Export')}</span>
+          </Button>
+          {exportOpen ? (
+            <div className="absolute right-0 z-10 mt-1 w-48 rounded-md border border-border bg-popover p-1 shadow-lg">
+              <ul className="space-y-0.5">
+                {EXPORT_FORMATS.map((fmt) => {
+                  const href = `/api/reports/reports/${encodeURIComponent(report.id)}/export?format=${fmt.value}`
+                  return (
+                    <li key={fmt.value}>
+                      <a
+                        href={href}
+                        className="block w-full rounded-sm px-3 py-1.5 text-left text-sm hover:bg-muted"
+                        onClick={() => setExportOpen(false)}
+                      >
+                        {t(fmt.labelKey, fmt.fallback)}
+                      </a>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </div>
         {canEdit ? (
           <Button type="button" onClick={onSave} disabled={isSaving || !isDirty}>
             <Save className="size-4" aria-hidden />
