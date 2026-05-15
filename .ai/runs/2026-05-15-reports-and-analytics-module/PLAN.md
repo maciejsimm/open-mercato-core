@@ -37,7 +37,7 @@
 | 3 | 3.1 | `lib/aggregator.ts` — in-memory group-by + pivot + measures + unit tests | done | 8005f6ed6 |
 | 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | done | 5110a7bf2 |
 | 3 | 3.3 | Builder canvas UI — type switcher, drag-and-drop fields (uses `@dnd-kit`) | todo | — |
-| 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | todo | — |
+| 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | done | 697550a55 |
 | 3 | 3.5 | `lib/chart-spec.ts` + `<ReportChart>` adapter | todo | — |
 | 3 | 3.6 | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + XLSX) | todo | — |
 | 3 | 3.7 | `ReportDashboard` entity + CRUD + commands; `/backend/reports/dashboards/*` | todo | — |
