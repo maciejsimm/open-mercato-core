@@ -40,6 +40,8 @@
   "reports.detail.error.save": "No se pudo guardar el informe.",
   "reports.detail.fields.dataset": "Conjunto de datos",
   "reports.detail.fields.description": "Descripción",
+  "reports.detail.fields.dragField": "Drag {name} into a zone",
+  "reports.detail.fields.dragHint": "Drag a field into a zone, or use the \"Add field\" buttons.",
   "reports.detail.fields.empty": "No hay campos disponibles para este conjunto.",
   "reports.detail.fields.hiddenCount": "{count} hidden by ACL",
   "reports.detail.fields.limit": "Límite de filas",

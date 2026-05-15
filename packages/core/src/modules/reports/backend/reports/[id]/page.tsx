@@ -12,9 +12,20 @@ import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
-import { ArrowLeft, Play, Save, Trash2, Plus, X } from 'lucide-react'
+import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { ReportChart } from '../../../widgets/ReportChart'
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  closestCenter,
+  type DragEndEvent,
+} from '@dnd-kit/core'
 
 type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
 type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
@@ -242,6 +253,85 @@ function migrateDefinition(prev: Definition, nextType: ReportType): Definition {
   return base
 }
 
+/**
+ * Apply a "drop field into zone" operation to the definition. Used by the
+ * drag-and-drop layer (3.3b) and by the click-to-add code path so both
+ * interactions stay in sync.
+ */
+function addFieldToZone(
+  prev: Definition,
+  zoneId: string,
+  fieldKey: string,
+  fieldByKey: Map<string, DatasetFieldRow>,
+): Definition {
+  const field = fieldByKey.get(fieldKey)
+  const defaultMeasure = (): MeasureExpr | null => {
+    if (!field) return null
+    const allowed = fieldAllowedAggregations(field)
+    return { field: fieldKey, aggregation: allowed[0] ?? 'count' }
+  }
+  if (prev.type === 'flat_list') {
+    if (zoneId === 'fields' && !prev.fields.includes(fieldKey)) {
+      return { ...prev, fields: [...prev.fields, fieldKey] }
+    }
+    if (zoneId === 'sort') {
+      const dir = prev.sort[0]?.dir ?? 'asc'
+      return { ...prev, sort: [{ field: fieldKey, dir }] }
+    }
+    return prev
+  }
+  if (prev.type === 'grouped') {
+    if (zoneId === 'fields' && !prev.fields.includes(fieldKey)) {
+      return { ...prev, fields: [...prev.fields, fieldKey] }
+    }
+    if (zoneId === 'groupBy' && !prev.groupBy.includes(fieldKey)) {
+      return { ...prev, groupBy: [...prev.groupBy, fieldKey] }
+    }
+    if (zoneId === 'measures') {
+      const m = defaultMeasure()
+      if (!m) return prev
+      return { ...prev, measures: [...prev.measures, m] }
+    }
+    if (zoneId === 'sort') {
+      const dir = prev.sort[0]?.dir ?? 'asc'
+      return { ...prev, sort: [{ field: fieldKey, dir }] }
+    }
+    return prev
+  }
+  if (prev.type === 'pivot') {
+    if (zoneId === 'rows' && !prev.rows.includes(fieldKey) && !prev.cols.includes(fieldKey)) {
+      return { ...prev, rows: [...prev.rows, fieldKey] }
+    }
+    if (zoneId === 'cols' && !prev.cols.includes(fieldKey) && !prev.rows.includes(fieldKey)) {
+      return { ...prev, cols: [...prev.cols, fieldKey] }
+    }
+    if (zoneId === 'value') {
+      const m = defaultMeasure()
+      if (!m) return prev
+      return { ...prev, value: m }
+    }
+    return prev
+  }
+  if (prev.type === 'chart') {
+    if (zoneId === 'groupBy' && !prev.groupBy.includes(fieldKey)) {
+      return { ...prev, groupBy: [...prev.groupBy, fieldKey] }
+    }
+    if (zoneId === 'measures') {
+      const m = defaultMeasure()
+      if (!m) return prev
+      return { ...prev, measures: [...prev.measures, m] }
+    }
+    return prev
+  }
+  // summary
+  if (zoneId === 'measures') {
+    const m = defaultMeasure()
+    if (!m) return prev
+    return { ...prev, measures: [...prev.measures, m] }
+  }
+  return prev
+}
+
 export default function ReportBuilderPage() {
   const params = useParams() as { id?: string }
   const router = useRouter()
@@ -324,6 +414,34 @@ export default function ReportBuilderPage() {
   const canEdit = report?.permission === 'edit'
 
   const markDirty = React.useCallback(() => setIsDirty(true), [])
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  )
+
+  const fieldByKey = React.useMemo(() => {
+    const map = new Map<string, DatasetFieldRow>()
+    for (const f of datasetFields) map.set(f.key, f)
+    return map
+  }, [datasetFields])
+
+  const handleDragEnd = React.useCallback((event: DragEndEvent) => {
+    if (!canEdit) return
+    const { active, over } = event
+    if (!over) return
+    const aid = String(active.id)
+    const oid = String(over.id)
+    if (aid.startsWith('field:') && oid.startsWith('zone:')) {
+      const fieldKey = aid.slice('field:'.length)
+      const zoneId = oid.slice('zone:'.length)
+      setDefinition((prev) => {
+        const next = addFieldToZone(prev, zoneId, fieldKey, fieldByKey)
+        return next
+      })
+      markDirty()
+    }
+  }, [canEdit, fieldByKey, markDirty])
 
   const handleTypeChange = React.useCallback((next: ReportType) => {
     if (!canEdit) return
@@ -461,37 +579,44 @@ export default function ReportBuilderPage() {
             t={t}
           />
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div className="flex flex-col gap-4 lg:col-span-1">
-              <MetadataCard
-                name={name}
-                description={description}
-                datasetId={report.datasetId}
-                canEdit={canEdit}
-                isSaving={isSaving}
-                onNameChange={(value) => { setName(value); markDirty() }}
-                onDescriptionChange={(value) => { setDescription(value); markDirty() }}
-                t={t}
-              />
-              <FieldList fields={datasetFields} hiddenPaths={dataset?.hiddenFieldPaths ?? []} t={t} />
-            </div>
+          <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="flex flex-col gap-4 lg:col-span-1">
+                <MetadataCard
+                  name={name}
+                  description={description}
+                  datasetId={report.datasetId}
+                  canEdit={canEdit}
+                  isSaving={isSaving}
+                  onNameChange={(value) => { setName(value); markDirty() }}
+                  onDescriptionChange={(value) => { setDescription(value); markDirty() }}
+                  t={t}
+                />
+                <FieldList
+                  fields={datasetFields}
+                  hiddenPaths={dataset?.hiddenFieldPaths ?? []}
+                  canEdit={canEdit}
+                  t={t}
+                />
+              </div>
 
-            <div className="flex flex-col gap-4 lg:col-span-2">
-              <TypeSwitcher
-                value={definition.type}
-                onChange={handleTypeChange}
-                canEdit={canEdit}
-                t={t}
-              />
-              <PerTypeCanvas
-                definition={definition}
-                fields={datasetFields}
-                canEdit={canEdit}
-                onChange={(next) => { setDefinition(next); markDirty() }}
-                t={t}
-              />
+              <div className="flex flex-col gap-4 lg:col-span-2">
+                <TypeSwitcher
+                  value={definition.type}
+                  onChange={handleTypeChange}
+                  canEdit={canEdit}
+                  t={t}
+                />
+                <PerTypeCanvas
+                  definition={definition}
+                  fields={datasetFields}
+                  canEdit={canEdit}
+                  onChange={(next) => { setDefinition(next); markDirty() }}
+                  t={t}
+                />
+              </div>
             </div>
-          </div>
+          </DndContext>
 
           <PreviewSection
             definition={definition}
@@ -627,28 +752,25 @@ function MetadataCard({
 type FieldListProps = {
   fields: DatasetFieldRow[]
   hiddenPaths: string[]
+  canEdit: boolean
   t: ReturnType<typeof useT>
 }
 
-function FieldList({ fields, hiddenPaths, t }: FieldListProps) {
+function FieldList({ fields, hiddenPaths, canEdit, t }: FieldListProps) {
   return (
     <section className="space-y-2 rounded-md border border-border bg-card p-4">
       <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.fields', 'Dataset fields')}</h2>
+      {canEdit && fields.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {t('reports.detail.fields.dragHint', 'Drag a field into a zone, or use the "Add field" buttons.')}
+        </p>
+      ) : null}
       {fields.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('reports.detail.fields.empty', 'No fields available for this dataset.')}</p>
       ) : (
         <ul className="space-y-1 max-h-96 overflow-y-auto">
           {fields.map((field) => (
-            <li
-              key={field.key}
-              className="rounded-md border border-border/60 bg-background px-3 py-2 text-sm"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{t(field.labelKey, field.key)}</span>
-                <span className="text-xs text-muted-foreground">{field.kind}</span>
-              </div>
-              <div className="mt-1 font-mono text-xs text-muted-foreground">{field.key}</div>
-            </li>
+            <DraggableFieldRow key={field.key} field={field} canEdit={canEdit} t={t} />
           ))}
         </ul>
       )}
@@ -658,6 +780,41 @@ function FieldList({ fields, hiddenPaths, t }: FieldListProps) {
         </p>
       ) : null}
     </section>
+  )
+}
+
+type DraggableFieldRowProps = {
+  field: DatasetFieldRow
+  canEdit: boolean
+  t: ReturnType<typeof useT>
+}
+
+function DraggableFieldRow({ field, canEdit, t }: DraggableFieldRowProps) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `field:${field.key}`,
+    disabled: !canEdit,
+  })
+  return (
+    <li
+      ref={setNodeRef}
+      className={cn(
+        'rounded-md border border-border/60 bg-background px-3 py-2 text-sm',
+        canEdit ? 'cursor-grab touch-none active:cursor-grabbing' : '',
+        isDragging ? 'opacity-50' : '',
+      )}
+      aria-label={t('reports.detail.fields.dragField', 'Drag {name} into a zone').replace('{name}', t(field.labelKey, field.key))}
+      {...(canEdit ? attributes : {})}
+      {...(canEdit ? listeners : {})}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          {canEdit ? <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden /> : null}
+          <span className="font-medium">{t(field.labelKey, field.key)}</span>
+        </span>
+        <span className="text-xs text-muted-foreground">{field.kind}</span>
+      </div>
+      <div className="mt-1 font-mono text-xs text-muted-foreground">{field.key}</div>
+    </li>
   )
 }
 
@@ -773,6 +930,8 @@ function PerTypeCanvas({ definition, fields, canEdit, onChange, t }: CanvasProps
 // ---------- Common zone primitives ----------
 
 type ZoneProps = {
+  /** Stable, unique zone id used by the DnD drop-router (e.g. `groupBy`, `measures`, `rows`). */
+  zoneId?: string
   title: string
   description?: string
   children: React.ReactNode
@@ -780,9 +939,17 @@ type ZoneProps = {
   isEmpty?: boolean
 }
 
-function Zone({ title, description, children, emptyLabel, isEmpty }: ZoneProps) {
+function Zone({ zoneId, title, description, children, emptyLabel, isEmpty }: ZoneProps) {
+  const drop = useDroppable({ id: zoneId ? `zone:${zoneId}` : `zone:__inert__`, disabled: !zoneId })
   return (
-    <section className="space-y-2 rounded-md border border-dashed border-border bg-card/60 p-3">
+    <section
+      ref={drop.setNodeRef}
+      className={cn(
+        'space-y-2 rounded-md border border-dashed border-border bg-card/60 p-3 transition-colors',
+        drop.isOver ? 'border-primary bg-primary/5' : '',
+      )}
+      data-zone-id={zoneId}
+    >
       <div className="flex items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -926,6 +1093,7 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
   return (
     <div className="space-y-3">
       <Zone
+        zoneId="fields"
         title={t('reports.detail.zones.fields', 'Fields')}
         description={t('reports.detail.zones.fieldsHint', 'Columns to project from the dataset.')}
         isEmpty={definition.fields.length === 0}
@@ -956,8 +1124,9 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
       </Zone>
 
       <Zone
+        zoneId="sort"
         title={t('reports.detail.zones.sort', 'Sort')}
-        description={t('reports.detail.zones.sortHint', 'First sort key wins; deeper keys ship in 3.3b.')}
+        description={t('reports.detail.zones.sortHint', 'First sort key wins; drag a field here or pick one below.')}
       >
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -1034,6 +1203,7 @@ function GroupedCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }:
   return (
     <div className="space-y-3">
       <Zone
+        zoneId="groupBy"
         title={t('reports.detail.zones.groupBy', 'Group by')}
         description={t('reports.detail.zones.groupByHint', 'Categorical fields that define one row per distinct combination.')}
         isEmpty={definition.groupBy.length === 0}
@@ -1064,6 +1234,7 @@ function GroupedCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }:
       </Zone>
 
       <MeasureZone
+        zoneId="measures"
         measures={definition.measures}
         fields={fields}
         fieldByKey={fieldByKey}
@@ -1078,6 +1249,7 @@ function GroupedCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }:
 }
 
 type MeasureZoneProps = {
+  zoneId?: string
   measures: MeasureExpr[]
   fields: DatasetFieldRow[]
   fieldByKey: Map<string, DatasetFieldRow>
@@ -1090,6 +1262,7 @@ type MeasureZoneProps = {
 }
 
 function MeasureZone({
+  zoneId,
   measures,
   fields,
   fieldByKey,
@@ -1128,6 +1301,7 @@ function MeasureZone({
 
   return (
     <Zone
+      zoneId={zoneId}
       title={title}
       description={description}
       isEmpty={measures.length === 0}
@@ -1218,6 +1392,7 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
   return (
     <div className="space-y-3">
       <Zone
+        zoneId="rows"
         title={t('reports.detail.zones.pivotRows', 'Rows')}
         description={t('reports.detail.zones.pivotRowsHint', 'Field(s) on the row axis. Cannot overlap with cols.')}
         isEmpty={definition.rows.length === 0}
@@ -1248,6 +1423,7 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
       </Zone>
 
       <Zone
+        zoneId="cols"
         title={t('reports.detail.zones.pivotCols', 'Columns')}
         description={t('reports.detail.zones.pivotColsHint', 'Field(s) on the column axis. Cannot overlap with rows.')}
         isEmpty={definition.cols.length === 0}
@@ -1278,6 +1454,7 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
       </Zone>
 
       <MeasureZone
+        zoneId="value"
         measures={definition.value ? [definition.value] : []}
         fields={fields}
         fieldByKey={fieldByKey}
@@ -1304,6 +1481,7 @@ type SummaryCanvasProps = {
 function SummaryCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: SummaryCanvasProps) {
   return (
     <MeasureZone
+      zoneId="measures"
       measures={definition.measures}
       fields={fields}
       fieldByKey={fieldByKey}
@@ -1431,6 +1609,7 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
       </Zone>
 
       <Zone
+        zoneId="groupBy"
         title={t('reports.detail.zones.groupBy', 'Group by')}
         description={t('reports.detail.zones.chartGroupByHint', 'Optional: explicit groupBy for the underlying execution. Defaults to the X field.')}
       >
@@ -1459,6 +1638,7 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
       </Zone>
 
       <MeasureZone
+        zoneId="measures"
         measures={definition.measures}
         fields={fields}
         fieldByKey={fieldByKey}

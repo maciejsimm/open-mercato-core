@@ -40,6 +40,8 @@
   "reports.detail.error.save": "Failed to save report.",
   "reports.detail.fields.dataset": "Dataset",
   "reports.detail.fields.description": "Description",
+  "reports.detail.fields.dragField": "Drag {name} into a zone",
+  "reports.detail.fields.dragHint": "Drag a field into a zone, or use the \"Add field\" buttons.",
   "reports.detail.fields.empty": "No fields available for this dataset.",
   "reports.detail.fields.hiddenCount": "{count} hidden by ACL",
   "reports.detail.fields.limit": "Row limit",

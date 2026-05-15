@@ -40,6 +40,8 @@
   "reports.detail.error.save": "Bericht konnte nicht gespeichert werden.",
   "reports.detail.fields.dataset": "Datensatz",
   "reports.detail.fields.description": "Beschreibung",
+  "reports.detail.fields.dragField": "Drag {name} into a zone",
+  "reports.detail.fields.dragHint": "Drag a field into a zone, or use the \"Add field\" buttons.",
   "reports.detail.fields.empty": "Keine Felder für diesen Datensatz verfügbar.",
   "reports.detail.fields.hiddenCount": "{count} hidden by ACL",
   "reports.detail.fields.limit": "Zeilenlimit",

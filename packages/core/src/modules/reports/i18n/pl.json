@@ -40,6 +40,8 @@
   "reports.detail.error.save": "Nie udało się zapisać raportu.",
   "reports.detail.fields.dataset": "Zbiór danych",
   "reports.detail.fields.description": "Opis",
+  "reports.detail.fields.dragField": "Drag {name} into a zone",
+  "reports.detail.fields.dragHint": "Drag a field into a zone, or use the \"Add field\" buttons.",
   "reports.detail.fields.empty": "Brak dostępnych pól dla tego zbioru danych.",
   "reports.detail.fields.hiddenCount": "{count} hidden by ACL",
   "reports.detail.fields.limit": "Limit wierszy",
