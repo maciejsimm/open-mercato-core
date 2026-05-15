@@ -21,7 +21,7 @@
 | 1 | 1.7 | Build `lib/query-translator.ts` for `flat_list` definitions + unit tests | done | 5d7baf1bc |
 | 1 | 1.8 | Build `lib/execute.ts` orchestrator (sync flat_list path) + unit tests | done | 2e403ab6a |
 | 1 | 1.9 | Add datasets API: `api/datasets/route.ts` + `api/datasets/[id]/route.ts` | done | d029aadbf |
-| 1 | 1.10 | Seed `customers/reports.ts` (people dataset) — canonical example | done | pending |
+| 1 | 1.10 | Seed `customers/reports.ts` (people dataset) — canonical example | done | db8535e15 |
 | 2 | 2.1 | Add ORM entities: `Report`, `ReportFolder`, `ReportFolderShare` | todo | — |
 | 2 | 2.2 | Add zod validators in `data/validators.ts` (flat_list discriminator only) | todo | — |
 | 2 | 2.3 | Add commands: folder.create/update/delete/share + report.create/update/delete/move | todo | — |

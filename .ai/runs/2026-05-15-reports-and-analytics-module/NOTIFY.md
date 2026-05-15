@@ -18,3 +18,12 @@
 - Targeted validation passed: shared tests 248/248, core reports tests 44/44, cli generator tests 61/61.
 - Pre-existing `#generated/entities.ids.generated` typecheck errors in unrelated modules are not introduced by this branch.
 - No UI Steps in this window → no Playwright/screenshots.
+
+## 2026-05-15T18:55:00Z — checkpoint 2 — Phase 1 close
+- Steps covered: 1.6..1.10 (commits 64acc614f..db8535e15).
+- Touched package: @open-mercato/core.
+- All 80 reports unit tests pass across 6 suites (field-redact, date-ranges, parameters, datasets-registry, query-translator, execute, plus the DSL tests in @open-mercato/shared).
+- Datasets API ships ACL-aware list + detail endpoints under /api/reports/datasets.
+- customers/reports.ts seeds the first canonical dataset.
+- No UI Steps in this window → no Playwright/screenshots. Phase 2 begins UI work in Steps 2.8–2.10.
+- Decision: deferred PR-level operations (creation, labels, auto-review-pr) until the user can run `gh` manually; commits remain local on the branch.
