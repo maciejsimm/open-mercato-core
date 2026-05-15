@@ -14,6 +14,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { ArrowLeft, Play, Save, Trash2, Plus, X } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
+import { ReportChart } from '../../../widgets/ReportChart'
 
 type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
 type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
@@ -1489,6 +1490,25 @@ function PreviewSection({ definition, runResult, isRunning, t }: PreviewSectionP
   const renderedColumns = runResult?.meta?.fields && runResult.meta.fields.length
     ? runResult.meta.fields
     : (renderedRows[0] ? Object.keys(renderedRows[0]) : [])
+
+  if (definition.type === 'chart') {
+    return (
+      <section className="rounded-md border border-border bg-card p-4">
+        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.preview', 'Preview')}</h2>
+        {renderedRows.length === 0 && !isRunning ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            {runResult
+              ? t('reports.detail.preview.empty', 'The report returned no rows.')
+              : t('reports.detail.preview.chartAwaitingExecutor', 'Save the chart definition; the run route will plot it once the aggregator is wired in (Step 3.5b).')}
+          </p>
+        ) : (
+          <div className="mt-3">
+            <ReportChart spec={definition.chart} rows={renderedRows} loading={isRunning} />
+          </div>
+        )}
+      </section>
+    )
+  }
 
   if (definition.type !== 'flat_list') {
     return (

@@ -55,6 +55,7 @@
   "reports.detail.pageTitle": "Informe",
   "reports.detail.picker.empty": "No more fields available.",
   "reports.detail.preview.aggregatedComingSoon": "Aggregated previews ship in the next step (Phase 3.5+). For now save your definition and use the API once the aggregator is wired into the run route.",
+  "reports.detail.preview.chartAwaitingExecutor": "Save the chart definition; the run route will plot it once the aggregator is wired in (Step 3.5b).",
   "reports.detail.preview.empty": "El informe no devolvió filas.",
   "reports.detail.preview.notRun": "Haz clic en «Ejecutar» para ejecutar este informe.",
   "reports.detail.preview.rowCount": "{count} filas",
