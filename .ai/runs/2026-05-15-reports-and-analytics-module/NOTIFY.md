@@ -59,3 +59,25 @@
 - Stop point chosen because the remaining Phase 2 Steps (folder navigator UI, builder shell UI, menu injection) need a runnable dev server for Playwright validation — UI work without a dev server cannot be safely written and shipped under the spec's QA contract.
 - 125 reports unit tests pass across 8 suites; stack-wide regressions checked (shared 248/248, cli 61/61). No typecheck errors in modules/reports.
 - Next session should resume at Step 2.8 with a runnable dev environment.
+
+## 2026-05-15T20:00:00Z — auto-continue-pr-loop resume (Phase 2 UI close)
+- Resumed by: @maciejsimm (via Claude Code with Opus 4.7)
+- Resume point: Phase 2 Step 2.8 (source: HANDOFF.md + PLAN.md Tasks table — first row with Status != done)
+- PR head SHA on entry: 0c4b1acc0 (still local; branch not yet pushed)
+- Reason for resume: previous session killed mid-flight before Phase 2 UI Steps (2.8–2.10) could land.
+- User direction this session: "After next major step I can regenerate everything and restart dev server" — Phase 2 close is the major step.
+- Goal: drive Steps 2.8 (list page), 2.9 (builder shell), 2.10 (injection-table.ts placeholder), then checkpoint and hand off to user for regen + UI smoke.
+
+## 2026-05-15T20:30:00Z — checkpoint 4 — Phase 2 close
+- Steps covered: 2.8 (774e2160f), 2.9 (35cff212d), 2.10 (dd0f9bc24).
+- Touched packages: @open-mercato/core only (reports module, plus apps/mercato/src/modules.ts enabling the module).
+- Targeted validation: typecheck filtered to reports/** clean; 125 reports unit tests passing across 8 suites; @open-mercato/shared 248/248. i18n auto-sorted across 4 locales (sort-only reformat). i18n usage for `reports.*` is clean (0 missing, 0 unused).
+- UI verification: SKIPPED — dev server at localhost:3010 runs from the user's primary worktree on `main`, not this branch. Documented in checkpoint-4-checks.md; the user will run `yarn db:migrate` + `yarn generate` + `yarn mercato configs cache structural --all-tenants` + restart `yarn dev` before the next resume can capture Playwright + screenshots.
+- Decision: rely on `backend/page.meta.ts` (Step 2.8) for the sidebar entry rather than a widget-injected menu item; the `widgets/injection-table.ts` file (Step 2.10) ships empty as the spec-required placeholder so the platform's widget generator discovers the file. Real widget injections (record-embed-host, dashboards menu) ship in Phase 3.
+- Scope creep notes (acknowledged): Step 2.8 also added `ownedByViewer: boolean` to the folder API response so the navigator can split "My Reports" vs "Shared with me" without exposing the current user id; Step 2.9 also added `id` query filter + `definition`/`parameters`/`version` to the reports list endpoint so the detail page can hydrate.
+- Cumulative: 20 code Steps shipped (Phase 1: 10 + Phase 2: 10). 20-Step safety threshold reached for this resume.
+
+## 2026-05-15T20:35:00Z — resume ended (still in-progress)
+- This resume shipped 3 Steps: 2.8, 2.9, 2.10 — Phase 2 is functionally complete.
+- Stop point chosen because: (a) the 20-Step safety threshold has been reached, (b) the user wants to regen + restart dev before continuing so the UI smoke can run on the next resume, (c) Phase 3 begins a large new scope (full builder canvas + dashboards + embeds) that warrants a fresh session.
+- Next session should resume at Phase 3 Step 3.1 (`lib/aggregator.ts`) once the user confirms the smoke path on `localhost:3010` from this branch.
