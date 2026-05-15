@@ -368,10 +368,6 @@ export default function ReportBuilderPage() {
 
   const handleRun = React.useCallback(async () => {
     if (!report) return
-    if (definition.type !== 'flat_list') {
-      flash(t('reports.detail.run.flatListOnly', 'Run preview currently supports flat_list only — aggregated types ship in Phase 3.5+.'), 'warning')
-      return
-    }
     if (isDirty) {
       const confirmed = await confirm({
         title: t('reports.detail.run.unsavedConfirm', 'You have unsaved changes. Run the saved version anyway?'),
@@ -397,7 +393,7 @@ export default function ReportBuilderPage() {
     } finally {
       setIsRunning(false)
     }
-  }, [confirm, definition.type, isDirty, report, t])
+  }, [confirm, isDirty, report, t])
 
   const handleDelete = React.useCallback(async () => {
     if (!report || !canEdit) return
@@ -1499,24 +1495,13 @@ function PreviewSection({ definition, runResult, isRunning, t }: PreviewSectionP
           <p className="mt-2 text-sm text-muted-foreground">
             {runResult
               ? t('reports.detail.preview.empty', 'The report returned no rows.')
-              : t('reports.detail.preview.chartAwaitingExecutor', 'Save the chart definition; the run route will plot it once the aggregator is wired in (Step 3.5b).')}
+              : t('reports.detail.preview.notRun', 'Click "Run" to execute this report.')}
           </p>
         ) : (
           <div className="mt-3">
             <ReportChart spec={definition.chart} rows={renderedRows} loading={isRunning} />
           </div>
         )}
-      </section>
-    )
-  }
-
-  if (definition.type !== 'flat_list') {
-    return (
-      <section className="rounded-md border border-border bg-card p-4">
-        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.preview', 'Preview')}</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t('reports.detail.preview.aggregatedComingSoon', 'Aggregated previews ship in the next step (Phase 3.5+). For now save your definition and use the API once the aggregator is wired into the run route.')}
-        </p>
       </section>
     )
   }

@@ -8,7 +8,7 @@ import type { ReportDefinition, ParameterDef } from '@open-mercato/shared/module
 import { Report, ReportFolder, ReportFolderShare } from '../../../../data/entities'
 import { reportRunSchema } from '../../../../data/validators'
 import { loadDataset } from '../../../../lib/datasets-registry'
-import { executeFlatList, shouldDispatchAsync } from '../../../../lib/execute'
+import { executeReport, shouldDispatchAsync } from '../../../../lib/execute'
 import { FieldAclDeniedError } from '../../../../lib/field-redact'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../../../lib/folder-acl'
 import { reportsTag, reportsErrorSchema } from '../../../openapi'
@@ -122,17 +122,6 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   }
 
   const definition = report.definitionJson as ReportDefinition
-  if (definition.type !== 'flat_list') {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'REPORT_TYPE_UNSUPPORTED',
-          message: `Phase 1 supports flat_list only (got '${definition.type}'); grouped/pivot/chart/summary land in Phase 3`,
-        },
-      },
-      { status: 501 },
-    )
-  }
 
   const params = parsedBody.data.params ?? {}
   const requestedMode = parsedBody.data.mode
@@ -156,7 +145,7 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
 
   const queryEngine = container.resolve('queryEngine') as QueryEngine
   try {
-    const out = await executeFlatList(queryEngine, {
+    const out = await executeReport(queryEngine, {
       dataset,
       definition,
       userFeatures,
@@ -198,7 +187,7 @@ export const openApi = {
     POST: {
       summary: 'Run a report synchronously',
       description:
-        'Resolves parameters, applies field-level ACL against the **running** user, translates to a QueryEngine call and returns rows + totals. Phase 1 supports flat_list reports only; other types return 501 until the Phase 3 aggregator is wired.',
+        'Resolves parameters, applies field-level ACL against the **running** user, translates to a QueryEngine call and returns rows + totals. Supports flat_list directly and grouped/pivot/chart/summary through the in-memory aggregator (capped by OM_REPORTS_INMEMORY_CAP, default 25 000 rows).',
       tags: [reportsTag],
       responses: [
         { status: 200, description: 'Sync execution result' },
@@ -209,7 +198,6 @@ export const openApi = {
         { status: 401, description: 'Auth required', schema: reportsErrorSchema },
         { status: 403, description: 'Field-ACL or folder ACL denied', schema: reportsErrorSchema },
         { status: 404, description: 'Report or dataset not found', schema: reportsErrorSchema },
-        { status: 501, description: 'Non-flat_list report types not yet supported', schema: reportsErrorSchema },
       ],
     },
   },

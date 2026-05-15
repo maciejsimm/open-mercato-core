@@ -105,10 +105,11 @@ describe('collectReferencedFieldPaths', () => {
       type: 'chart',
       chart: {
         type: 'bar',
-        dimension: 'status',
-        series: [{ measure: { field: 'total', aggregation: 'sum' } }],
+        xField: 'status',
+        yFields: ['sum_total'],
       },
       filters: [],
+      measures: [{ field: 'total', aggregation: 'sum', alias: 'sum_total' }],
     }
     expect(collectReferencedFieldPaths(def).sort()).toEqual(['status', 'total'])
   })

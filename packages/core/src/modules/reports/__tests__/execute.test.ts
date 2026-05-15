@@ -1,4 +1,4 @@
-import { executeFlatList, shouldDispatchAsync } from '../lib/execute'
+import { executeFlatList, executeReport, shouldDispatchAsync } from '../lib/execute'
 import { FieldAclDeniedError } from '../lib/field-redact'
 import { defineDataset, type Dataset, type ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
 import type { QueryEngine, QueryOptions, QueryResult } from '@open-mercato/shared/lib/query/types'
@@ -180,5 +180,186 @@ describe('shouldDispatchAsync', () => {
       estimatedRows: 100,
       cap: 25_000,
     })
+  })
+})
+
+// ----------------------------------------------------------------------------
+// executeReport — aggregated paths (grouped / pivot / summary / chart)
+// ----------------------------------------------------------------------------
+
+const salesDataset: Dataset = defineDataset({
+  id: 'sales.orders',
+  moduleId: 'sales',
+  labelKey: 'sales.reports.datasets.orders.label',
+  entityType: 'sales:order',
+  fields: [
+    { key: 'id', labelKey: 'sales.fields.id', kind: 'id' },
+    { key: 'region', labelKey: 'sales.fields.region', kind: 'enum' },
+    { key: 'segment', labelKey: 'sales.fields.segment', kind: 'enum' },
+    { key: 'amount', labelKey: 'sales.fields.amount', kind: 'money', aggregations: ['sum', 'avg', 'min', 'max', 'count'] },
+    { key: 'customer_id', labelKey: 'sales.fields.customer_id', kind: 'fk', joinTo: 'customers' },
+  ],
+})
+
+const SALES_ROWS = [
+  { region: 'EU', segment: 'enterprise', amount: 100, customer_id: 'c1' },
+  { region: 'EU', segment: 'enterprise', amount: 200, customer_id: 'c1' },
+  { region: 'EU', segment: 'smb', amount: 30, customer_id: 'c2' },
+  { region: 'US', segment: 'enterprise', amount: 500, customer_id: 'c3' },
+  { region: 'US', segment: 'smb', amount: 50, customer_id: 'c4' },
+  { region: 'US', segment: 'smb', amount: 70, customer_id: 'c4' },
+]
+
+describe('executeReport — grouped', () => {
+  test('aggregates rows by groupBy and emits one row per group', async () => {
+    const def: ReportDefinition = {
+      type: 'grouped',
+      fields: ['region', 'amount'],
+      groupBy: ['region'],
+      measures: [
+        { field: 'amount', aggregation: 'sum', alias: 'total' },
+        { field: 'amount', aggregation: 'count' },
+      ],
+      filters: [],
+      sort: [{ field: 'total', dir: 'desc' }],
+    }
+    const { engine } = mockEngine([...SALES_ROWS], SALES_ROWS.length)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.mode).toBe('sync')
+    expect(out.rows).toEqual([
+      { region: 'US', total: 620, count_amount: 3 },
+      { region: 'EU', total: 330, count_amount: 3 },
+    ])
+    expect(out.meta.fields).toEqual(['region', 'total', 'count_amount'])
+  })
+
+  test('honors limit on the aggregated result', async () => {
+    const def: ReportDefinition = {
+      type: 'grouped',
+      fields: ['region', 'segment', 'amount'],
+      groupBy: ['region', 'segment'],
+      measures: [{ field: 'amount', aggregation: 'sum', alias: 'total' }],
+      filters: [],
+      sort: [{ field: 'total', dir: 'desc' }],
+      limit: 2,
+    }
+    const { engine } = mockEngine([...SALES_ROWS], SALES_ROWS.length)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.rows).toHaveLength(2)
+    expect(out.rows[0]).toMatchObject({ region: 'US', segment: 'enterprise', total: 500 })
+  })
+})
+
+describe('executeReport — pivot', () => {
+  test('flattens to wide rows; missing combinations are null', async () => {
+    const def: ReportDefinition = {
+      type: 'pivot',
+      rows: ['region'],
+      cols: ['segment'],
+      value: { field: 'amount', aggregation: 'sum' },
+      filters: [],
+    }
+    const { engine } = mockEngine([...SALES_ROWS], SALES_ROWS.length)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.rows).toEqual([
+      { region: 'EU', enterprise: 300, smb: 30 },
+      { region: 'US', enterprise: 500, smb: 120 },
+    ])
+    expect(out.meta.fields).toEqual(['region', 'enterprise', 'smb'])
+  })
+})
+
+describe('executeReport — summary', () => {
+  test('returns a single row across the whole input', async () => {
+    const def: ReportDefinition = {
+      type: 'summary',
+      measures: [
+        { field: 'amount', aggregation: 'sum' },
+        { field: 'amount', aggregation: 'avg' },
+        { field: 'customer_id', aggregation: 'count_distinct' },
+      ],
+      filters: [],
+    }
+    const { engine } = mockEngine([...SALES_ROWS], SALES_ROWS.length)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.rows).toHaveLength(1)
+    expect(out.rows[0]).toEqual({
+      sum_amount: 950,
+      avg_amount: 950 / 6,
+      count_distinct_customer_id: 4,
+    })
+  })
+})
+
+describe('executeReport — chart', () => {
+  test('uses declared groupBy + measures and projects via aggregator', async () => {
+    const def: ReportDefinition = {
+      type: 'chart',
+      chart: { type: 'bar', xField: 'region', yFields: ['total'] },
+      groupBy: ['region'],
+      measures: [{ field: 'amount', aggregation: 'sum', alias: 'total' }],
+      filters: [],
+    }
+    const { engine, calls } = mockEngine([...SALES_ROWS], SALES_ROWS.length)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.rows).toEqual([
+      { region: 'EU', total: 330 },
+      { region: 'US', total: 620 },
+    ])
+    expect(out.meta.fields).toEqual(['region', 'total'])
+    // Sanity: the query projection includes the X field and the measure field.
+    const projection = (calls[0].opts?.fields ?? []) as string[]
+    expect(projection).toEqual(expect.arrayContaining(['region', 'amount']))
+  })
+})
+
+describe('executeReport — flat_list passthrough', () => {
+  test('delegates to executeFlatList and back-fills meta.fields', async () => {
+    const def: ReportDefinition = {
+      type: 'flat_list',
+      fields: ['id', 'region'],
+      filters: [],
+      sort: [],
+    }
+    const { engine } = mockEngine([{ id: 'a', region: 'EU' }], 1)
+    const out = await executeReport(engine, {
+      dataset: salesDataset,
+      definition: def,
+      userFeatures: new Set(['*']),
+      tenantId: 't1',
+      organizationId: 'o1',
+    })
+    expect(out.meta.fields).toEqual(['id', 'region'])
+    expect(out.rows).toEqual([{ id: 'a', region: 'EU' }])
   })
 })

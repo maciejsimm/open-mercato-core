@@ -125,10 +125,11 @@ export function collectReferencedFieldPaths(def: ReportDefinition): string[] {
       out.add(def.value.field)
       break
     case 'chart':
-      out.add(def.chart.dimension)
+      if (def.chart?.xField) out.add(def.chart.xField)
       if (def.groupBy) for (const g of def.groupBy) out.add(g)
       collectMeasureFieldRefs(def.measures, out)
-      for (const s of def.chart.series) out.add(s.measure.field)
+      // yFields are measure aliases (not dataset fields) — the underlying
+      // dataset fields are already pulled in via def.measures above.
       break
     case 'summary':
       collectMeasureFieldRefs(def.measures, out)

@@ -195,9 +195,16 @@ export type ChartKind = 'bar' | 'line' | 'pie' | 'area' | 'donut' | 'scatter' | 
 
 export type ChartSpec = {
   type: ChartKind
-  dimension: string
-  series: Array<{ measure: MeasureExpr; labelKey?: string; color?: string }>
+  /** Field on the X axis. Must be a categorical dataset field (or a declared groupBy key). */
+  xField: string
+  /** Measure aliases plotted as Y series. Must be produced by `measures[]` when declared. */
+  yFields: string[]
   stacked?: boolean
+  showLegend?: boolean
+  /** Reserved for richer styling later (axis labels, palette overrides). */
+  xAxisLabel?: string
+  yAxisLabel?: string
+  palette?: string[]
 }
 
 export type ReportDefinition =
@@ -230,6 +237,7 @@ export type ReportDefinition =
       filters: FilterExpr[]
       groupBy?: string[]
       measures?: MeasureExpr[]
+      limit?: number
     }
   | {
       type: 'summary'
