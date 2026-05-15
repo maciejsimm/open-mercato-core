@@ -12,7 +12,7 @@
 | Phase | Step | Title | Status | Commit |
 |-------|------|-------|--------|--------|
 | 0 | 0.1 | Seed run folder (PLAN/HANDOFF/NOTIFY) | done | aed0a4e76 |
-| 1 | 1.1 | Add `defineDataset` DSL + types in `packages/shared/src/modules/reports/` | todo | — |
+| 1 | 1.1 | Add `defineDataset` DSL + types in `packages/shared/src/modules/reports/` | done | 75c575599 |
 | 1 | 1.2 | Extend CLI generator to discover `<module>/reports.ts` and emit `reports-datasets.generated.ts` | todo | — |
 | 1 | 1.3 | Scaffold reports module: `index.ts`, `acl.ts`, `setup.ts`, `events.ts`, `translations.ts`, `encryption.ts` | todo | — |
 | 1 | 1.4 | Build `lib/field-redact.ts` + unit tests | todo | — |
