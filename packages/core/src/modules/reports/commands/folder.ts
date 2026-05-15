@@ -245,7 +245,7 @@ const deleteFolderShareCommand: CommandHandler<FolderShareDeleteInput, { shareId
     if (!canShareFolder(folder, acl)) {
       throw new CrudHttpError(403, { error: 'Forbidden' })
     }
-    await em.removeAndFlush(share)
+    await em.remove(share).flush()
 
     const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
     await emitCrudSideEffects({

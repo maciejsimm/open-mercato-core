@@ -1,4 +1,4 @@
-import { Entity, PrimaryKey, Property, Index, Unique, Check } from '@mikro-orm/core'
+import { Entity, PrimaryKey, Property, Index, Unique, Check } from '@mikro-orm/decorators/legacy'
 
 @Entity({ tableName: 'reports_folders' })
 @Index({ name: 'reports_folders_scope_idx', properties: ['tenantId', 'organizationId', 'parentFolderId'] })
