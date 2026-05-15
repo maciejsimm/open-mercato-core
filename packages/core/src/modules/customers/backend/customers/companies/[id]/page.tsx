@@ -873,6 +873,12 @@ export default function CustomerCompanyDetailPage({ params }: { params?: { id?: 
             isDeleting={isDeleting}
           />
 
+          <InjectionSpot
+            spotId="detail:customers.company:after-header"
+            context={injectionContext}
+            data={data}
+          />
+
           <DetailTabsLayout
             className="space-y-6"
             tabs={tabs}

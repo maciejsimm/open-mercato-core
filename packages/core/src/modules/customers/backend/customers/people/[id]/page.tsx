@@ -805,7 +805,13 @@ export default function CustomerPersonDetailPage({ params }: { params?: { id?: s
               )
             }}
           />
-  
+
+          <InjectionSpot
+            spotId="detail:customers.person:after-header"
+            context={injectionContext}
+            data={data}
+          />
+
           <DetailTabsLayout
             tabs={tabs}
             activeTab={activeTab}
