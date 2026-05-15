@@ -1,72 +1,79 @@
 # Handoff — 2026-05-15-reports-and-analytics-module
 
-**Last updated:** 2026-05-15T22:25:00Z
+**Last updated:** 2026-05-15T22:55:00Z
 **Branch:** feat/reports-and-analytics-module
 **PR:** not yet opened (gh CLI unavailable; user opens manually after pushing the branch)
-**Current phase/step:** Phase 3 in progress — every builder Step (3.1–3.5b + 3.3a-d) done; next is **Step 3.6 (Export route — CSV + XLSX)** OR **Step 3.7 (ReportDashboard)**
-**Last commit:** 28f83f568 — `feat(core/reports): parameters declaration UI (3.3d)`; the checkpoint 6 commit follows in this resume's final push
-**Final status this resume:** in-progress — the builder is feature-complete for Phase 3 (per-type zones, drag-and-drop, typed filters, parameters declaration). Aggregated execution + chart preview live since 3.5b.
+**Current phase/step:** Phase 3 — all eleven primary steps complete (3.1–3.11). Deferred small items: 3.6b XLSX, 3.7b dashboards UI, 3.9b embeds admin page. Phase 4 next.
+**Last commit:** 5cc28de8f — `feat(core/reports): record-embed-host widget (3.11)`; the checkpoint 7 commit follows in this push.
+**Final status this resume:** in-progress — embed pipeline lives end-to-end. Phase 4 (schedules + async + notifications) and the deferred UI/UX items are still ahead.
 
 ## What just happened (this session)
 
-Eight code steps shipped (across the prior turn and this turn). Cumulative pad: **195/195** reports unit tests.
+This session shipped **16 code Steps** across Phase 2 review-fix work and the entire Phase 3 happy path. Reports unit tests grew from 125 → 209 across 12 suites.
+
+Steps in this final stretch (since checkpoint 6):
 
 | Step | Commit | What |
 |------|--------|------|
-| 2.11-fix | 78b7d9071 | Fixed wrong `/backend/reports/reports/*` URLs (file-path vs route mismatch) |
-| 2.12-fix | 7f7b8aa30 | MikroORM v7 compat after main merge |
-| 3.1 | 8005f6ed6 | `lib/aggregator.ts` — group-by/pivot/summary + 25 unit tests |
-| 3.2 | 5110a7bf2 | Strict validators for grouped/pivot/chart/summary + 17 tests |
-| 3.4 | 697550a55 | `AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart` wrappers in `@open-mercato/ui/backend/charts` |
-| 3.3a | bc40a0bb4 | Type-aware builder + per-type zones (click-to-add) + spinner-bug fix |
-| 3.5 | bd0838eef | `lib/chart-spec.ts` + `<ReportChart>` adapter |
-| 3.5b | 400bf8a79 | `executeReport` dispatches grouped/pivot/chart/summary; run route serves all types |
-| 3.3b | 525857ed4 | `@dnd-kit` drag-fields-into-zones |
-| 3.3c | d455525f6 | Filters editor typed by field kind (literal + date_range) |
-| 3.3d | f47082520 | Parameters declaration UI |
+| 3.6a | ac4606075 | Export route (CSV / JSON / XML / Markdown) + `lib/export.ts` + Export dropdown in the builder header |
+| 3.7 | c92c1699a | `ReportDashboard` entity + migration + validators + commands + CRUD route |
+| 3.8 | e4ae57186 | `api/dashboards/[id]/run` parallel tile execution |
+| 3.9 | 5ac77f4af | `ReportEmbed` entity + migration + validators + commands + CRUD route |
+| 3.10 | 369ddf0ef | `detail:customers.{person,company}:after-header` injection spots |
+| 3.11 | 5cc28de8f | `record-embed-host` widget — closes the embed pipeline end-to-end |
 
-End-to-end the user can now:
-1. List reports + navigate folders at `/backend/reports`.
-2. Create a new report at `/backend/reports/new`.
-3. Switch report type (flat_list / grouped / pivot / chart / summary).
-4. Build the definition via click-to-add OR drag-from-FieldList.
-5. Add typed filters with the proper operators per field kind.
-6. Declare named parameters (kind, default, required, fk/enum metadata).
-7. Save and Run any report type; aggregated runs return rows via the aggregator.
-8. See chart previews render in the detail page.
+End-to-end the module now supports:
+
+1. **Reports** — list at `/backend/reports`, create at `/backend/reports/new`, builder + run + export at `/backend/reports/<id>` (all five types).
+2. **Dashboards** — backend complete (entity, CRUD, parallel run). UI not built yet (3.7b).
+3. **Embeds** — backend complete (entity, CRUD, render endpoint). Admin UI not built yet (3.9b). Widget host already renders configured embeds on the two customers detail pages.
 
 ## Next concrete action
 
-Step 3.6 is the highest-leverage next move (export route). Step 3.7 (Dashboards) is the next big-ticket UI step.
+Three sensible next moves — pick whichever fits the session:
 
-- **Step 3.6 — Export route + `lib/export.ts`.** New `api/reports/[id]/export/route.ts` that runs the report and returns CSV or XLSX. Choose an XLSX writer (`exceljs` if not already in deps). Mid-size: API route + writer + a few unit tests.
-- **Step 3.7 — `ReportDashboard` entity + CRUD + dashboards pages.** New ORM entity + migration + commands + zod validators + `makeCrudRoute` + `/backend/reports/dashboards/*` pages. Larger; touches schema + UI + commands.
-- **Phase 4** — Scheduling, async dispatch, notifications. Only after 3.6/3.7 are stable.
+- **Step 3.7b — Dashboards UI** (list / new / composer with `@dnd-kit/sortable` tile grid). Big UI step (~800–1000 LOC). Closes the dashboards story for end users; without it operators have to use the API to compose dashboards.
+- **Step 3.9b — Embeds admin page** (`/backend/reports/embeds`). Smaller (~300 LOC). Lets admins attach reports/dashboards to host spots via UI instead of the API.
+- **Phase 4 kick-off — `ReportSchedule` entity + workers + email pipeline**. Biggest scope; touches schedules, queue workers, notifications, and async dispatch all together.
 
-The Filters↔Parameters bridge (allow a literal filter to be converted to a parameter filter via a dropdown of declared parameters) is intentionally still open. It's a small follow-up step (~50 LOC in FilterRow). Worth picking up alongside or right after 3.6/3.7.
+Pick `3.7b` if you want to deliver a fully usable dashboard experience next; pick `3.9b` if you want admins to configure embeds without touching the API; pick `Phase 4` if you want to start the scheduling story.
 
-## Phase 3 plan (remaining)
+The filters↔parameters bridge (literal filter → parameter filter dropdown) remains a small polish item worth picking up alongside any of the above.
 
-- 3.6 Export route (CSV + XLSX)
-- 3.7 `ReportDashboard` entity + CRUD + dashboards pages
-- 3.8 `api/dashboards/[id]/run/route.ts` (parallel tile execution)
-- 3.9 `ReportEmbed` entity + admin page
-- 3.10 Customers detail-page injection spots
-- 3.11 `record-embed-host` widget
+## Phase 3 remaining items (deferred)
+- 3.6b XLSX export (needs `exceljs` workspace dep)
+- 3.7b Dashboards UI
+- 3.9b Embeds admin page
+
+## Phase 4 plan (when ready)
+- 4.1 `ReportSchedule` entity + CRUD + commands
+- 4.2 Workers: `reports-schedule-runner`, `reports-schedule-execute`, `reports-async-execute`, `reports-export-build`
+- 4.3 `lib/email-attachments.ts` + `ScheduledReportEmail` React template
+- 4.4 `notifications.ts` + `notifications.client.ts`
+- 4.5 Async execute path → attachments + notifications
+- 4.6 Schedule editor UI
+
+## Phase 5 plan
+- 5.1 Result cache (Redis) + tag-based invalidation
+- 5.2 Query profile integration
+- 5.3 `reports-executions-prune` retention worker
+- 5.4 CLI commands
+- 5.5 Docs
+- 5.6 Playwright e2e
 
 ## Blockers / open questions
 - `gh` CLI still unavailable. PR creation, label normalization, and `auto-review-pr` autofix pass remain user actions after pushing the branch.
 - Remote push requires user credentials. Branch remains local.
-- MikroORM snapshot for the reports module is still not committed (carry-over). Step 3.7 will likely require it when adding `ReportDashboard`.
-- No Playwright e2e scenario yet. 5.6 covers it; we can add a smaller smoke scenario as part of any UI step.
+- MikroORM snapshot for the reports module is still not committed (carry-over). Two new migrations landed in Phase 3 (`Migration20260516000001` for dashboards, `Migration20260516000002` for embeds) on top of the original `Migration20260515182452`. The user should run `yarn db:migrate` then `yarn db:generate` to refresh the snapshot.
+- No Playwright e2e for the reports module yet (5.6).
 
 ## Environment caveats
 - Dev runtime: yes, on this branch in the primary worktree.
-- The builder polish (drag-and-drop, filters, parameters) is unit-tested via the existing reports test suite (no UI-specific tests) and typecheck — please verify in the running dev server before continuing.
+- The embed pipeline, dashboards run route, and chart preview are unit-tested via the existing reports test suite (209/209) and typecheck — please verify in the running dev server before continuing.
 
 ## Worktree
 - Path: `/Users/maciejsimm/Documents/Workspaces/Dainamite/open-mercato-core`
-- Primary checkout — no isolated worktree.
+- Primary checkout — no isolated worktree (per recorded user preference).
 
 ## Resume instructions
-Re-enter with `/auto-continue-pr-loop` and tell me which path to take: `3.6`, `3.7`, or a polish step like the Filters↔Parameters bridge. Default if you just say "continue": **Step 3.6** (export route).
+Re-enter with `/auto-continue-pr-loop` and tell me which direction: `3.7b`, `3.9b`, `Phase 4`, or the filters↔parameters bridge. Default if you just say "continue": **Step 3.7b (dashboards UI)**.

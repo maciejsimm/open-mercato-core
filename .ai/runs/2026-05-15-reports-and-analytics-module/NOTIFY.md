@@ -114,3 +114,11 @@
 - Validation: yarn generate clean (13.6s), tsc clean for core reports, jest 195/195 across 11 suites, i18n sync clean (advisory unused-keys count unchanged at 3606).
 - UI verification: skipped at checkpoint level — no reports .ai/qa Playwright scenario yet (5.6 covers it); user verified URL fix manually earlier in this session. Builder polish lacks UI-level tests; recommended to land a smoke scenario alongside Step 3.7 or as a separate Phase 5 prep step.
 - Decision: pause here and surface to user. Next step Step 3.6 (Export route — CSV + XLSX) is the highest-leverage follow-up; Step 3.7 (Dashboards) is the next major scope. Filters↔Parameters bridge is a small polish item worth picking up alongside.
+
+## 2026-05-15T22:55:00Z — checkpoint 7 — Phase 3 primary path closed (3.6a..3.11)
+- Steps covered: 3.6a (ac4606075), 3.7 (c92c1699a), 3.8 (e4ae57186), 3.9 (5ac77f4af), 3.10 (369ddf0ef), 3.11 (5cc28de8f). 6 code Steps since checkpoint 6.
+- Touched packages: @open-mercato/core (reports + customers).
+- Validation: yarn generate clean, tsc clean for reports + customers, jest 209/209 across 12 suites, i18n sync clean. No new translation strings added in this window.
+- UI verification: skipped at checkpoint level — no Playwright scenario yet (5.6 covers it). The embed widget and dashboards run route are exercised end-to-end by their unit tests + the existing aggregator/executor coverage.
+- Decision: stop here. Three deferred Phase 3 items (3.6b XLSX, 3.7b dashboards UI, 3.9b embeds admin page) plus the filters↔parameters bridge remain. Phase 4 is the next major scope (schedules + async + notifications + workers).
+- Total session pace: 16 code Steps shipped (Phase 2 fixups + entire Phase 3 happy path). Cumulative across all resumes: ~26 Steps.
