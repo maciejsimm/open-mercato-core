@@ -24,6 +24,7 @@ module.exports = {
     '^@open-mercato/ui/(.*)$': '<rootDir>/../ui/src/$1',
     '^@open-mercato/ai-assistant/(.*)$': '<rootDir>/../ai-assistant/src/$1',
     '^@/\\.mercato/generated/inbox-actions\\.generated$': '<rootDir>/jest.mocks/inbox-actions.generated.js',
+    '^@/\\.mercato/generated/reports-datasets\\.generated$': '<rootDir>/jest.mocks/reports-datasets.generated.js',
     '^react-markdown$': '<rootDir>/jest.mocks/react-markdown.js',
     '^remark-gfm$': '<rootDir>/jest.mocks/remark-gfm.js',
   },
