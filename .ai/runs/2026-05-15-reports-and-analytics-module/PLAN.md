@@ -36,7 +36,10 @@
 | 2 | 2.12-fix | MikroORM v7 compatibility (decorators/legacy import + `em.remove(...).flush()`) after main merge | done | 7f7b8aa30 |
 | 3 | 3.1 | `lib/aggregator.ts` — in-memory group-by + pivot + measures + unit tests | done | 8005f6ed6 |
 | 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | done | 5110a7bf2 |
-| 3 | 3.3 | Builder canvas UI — type switcher, drag-and-drop fields (uses `@dnd-kit`) | todo | — |
+| 3 | 3.3a | Builder canvas — type switcher + per-type drop zones (click-to-add) + spinner fix on detail page | done | bc40a0bb4 |
+| 3 | 3.3b | Builder canvas — drag-and-drop (`@dnd-kit`) replaces click-to-add for the field/zone interactions | todo | — |
+| 3 | 3.3c | Builder canvas — filters editor typed by field kind (reuses existing primitives) | todo | — |
+| 3 | 3.3d | Builder canvas — parameters declaration UI | todo | — |
 | 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | done | 697550a55 |
 | 3 | 3.5 | `lib/chart-spec.ts` + `<ReportChart>` adapter | todo | — |
 | 3 | 3.6 | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + XLSX) | todo | — |
