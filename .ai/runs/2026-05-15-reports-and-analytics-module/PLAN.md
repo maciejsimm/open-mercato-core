@@ -45,7 +45,8 @@
 | 3 | 3.5b | Extend `lib/execute.ts` to dispatch grouped/pivot/chart/summary through the aggregator; run route supports all types | done | 400bf8a79 |
 | 3 | 3.6a | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + JSON + XML + Markdown via shared serializer) | done | ac4606075 |
 | 3 | 3.6b | XLSX export support (adds `exceljs` dependency) | todo | — |
-| 3 | 3.7 | `ReportDashboard` entity + CRUD + commands; `/backend/reports/dashboards/*` | todo | — |
+| 3 | 3.7 | `ReportDashboard` entity + commands + CRUD route (backend foundation) | done | c92c1699a |
+| 3 | 3.7b | Dashboards UI — list, new, composer (`/backend/reports/dashboards/*`) | todo | — |
 | 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | todo | — |
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands; admin page `/backend/reports/embeds` | todo | — |
 | 3 | 3.10 | Expose `detail:customers.company:after-header` and `detail:customers.person:after-header` injection spots | todo | — |

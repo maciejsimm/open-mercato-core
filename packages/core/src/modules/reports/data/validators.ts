@@ -340,3 +340,87 @@ export const reportRunSchema = z.object({
   mode: z.enum(['sync', 'async']).optional(),
 })
 export type ReportRunInput = z.infer<typeof reportRunSchema>
+
+// ---------- Dashboards ----------
+
+const tileModeSchema = z.enum(['inline', 'summary', 'chart-only'])
+
+const parameterBindingSchema = z.union([
+  z.object({ source: z.literal('literal'), value: z.unknown() }),
+  z.object({ source: z.literal('parameter'), parameter: z.string().min(1) }),
+  z.object({ source: z.literal('record-field'), recordField: z.string().min(1) }),
+])
+
+const dashboardTileSchema = z.object({
+  id: z.string().min(1).max(80),
+  reportId: uuid(),
+  x: z.number().int().min(0).max(1000),
+  y: z.number().int().min(0).max(10_000),
+  w: z.number().int().min(1).max(48),
+  h: z.number().int().min(1).max(96),
+  mode: tileModeSchema.default('inline'),
+  title: z.string().trim().max(200).optional(),
+  paramBindings: z.record(z.string(), parameterBindingSchema).optional(),
+})
+export type DashboardTileInput = z.infer<typeof dashboardTileSchema>
+
+const dashboardGridSchema = z.object({
+  cols: z.number().int().min(1).max(48).default(12),
+  rowHeight: z.number().int().min(20).max(400).default(80),
+  gap: z.number().int().min(0).max(64).default(8),
+})
+
+export const dashboardLayoutSchema = z.object({
+  grid: dashboardGridSchema.default({ cols: 12, rowHeight: 80, gap: 8 }),
+  tiles: z.array(dashboardTileSchema).max(60),
+})
+  .superRefine((layout, ctx) => {
+    const ids = new Set<string>()
+    layout.tiles.forEach((tile, idx) => {
+      if (ids.has(tile.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['tiles', idx, 'id'],
+          message: `Duplicate tile id '${tile.id}'`,
+        })
+      }
+      ids.add(tile.id)
+    })
+  })
+export type DashboardLayoutInput = z.infer<typeof dashboardLayoutSchema>
+
+export const dashboardCreateSchema = z.object({
+  folderId: uuid(),
+  name: nameSchema,
+  description: descriptionSchema.optional().nullable(),
+  layout: dashboardLayoutSchema,
+  parameters: z.array(parameterDefSchema).optional(),
+})
+export type DashboardCreateInput = z.infer<typeof dashboardCreateSchema>
+
+export const dashboardUpdateSchema = z.object({
+  id: uuid(),
+  folderId: uuid().optional(),
+  name: nameSchema.optional(),
+  description: descriptionSchema.optional().nullable(),
+  layout: dashboardLayoutSchema.optional(),
+  parameters: z.array(parameterDefSchema).optional(),
+  version: z.number().int().min(1).optional(),
+})
+export type DashboardUpdateInput = z.infer<typeof dashboardUpdateSchema>
+
+export const dashboardDeleteSchema = z.object({
+  id: uuid(),
+})
+export type DashboardDeleteInput = z.infer<typeof dashboardDeleteSchema>
+
+export const dashboardMoveSchema = z.object({
+  id: uuid(),
+  folderId: uuid(),
+})
+export type DashboardMoveInput = z.infer<typeof dashboardMoveSchema>
+
+export const dashboardRunSchema = z.object({
+  params: z.record(z.string(), z.unknown()).optional(),
+})
+export type DashboardRunInput = z.infer<typeof dashboardRunSchema>

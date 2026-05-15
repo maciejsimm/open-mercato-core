@@ -1,4 +1,7 @@
 import {
+  dashboardCreateSchema,
+  dashboardLayoutSchema,
+  dashboardUpdateSchema,
   folderCreateSchema,
   folderShareCreateSchema,
   reportCreateSchema,
@@ -364,6 +367,88 @@ describe('reportCreateSchema / reportUpdateSchema', () => {
       parameters: [{ key: '123-bad-key', kind: 'string' }],
     })
     expect(bad.success).toBe(false)
+  })
+})
+
+describe('dashboardLayoutSchema', () => {
+  test('accepts a minimal layout with default grid', () => {
+    const result = dashboardLayoutSchema.safeParse({
+      tiles: [{
+        id: 'a',
+        reportId: '11111111-1111-4111-8111-111111111111',
+        x: 0, y: 0, w: 6, h: 4,
+      }],
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.grid).toEqual({ cols: 12, rowHeight: 80, gap: 8 })
+      expect(result.data.tiles[0].mode).toBe('inline')
+    }
+  })
+
+  test('rejects duplicate tile ids', () => {
+    const result = dashboardLayoutSchema.safeParse({
+      tiles: [
+        { id: 'a', reportId: '11111111-1111-4111-8111-111111111111', x: 0, y: 0, w: 6, h: 4 },
+        { id: 'a', reportId: '22222222-2222-4222-8222-222222222222', x: 6, y: 0, w: 6, h: 4 },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects tiles with non-uuid reportId or zero-size cells', () => {
+    expect(
+      dashboardLayoutSchema.safeParse({
+        tiles: [{ id: 'a', reportId: 'not-a-uuid', x: 0, y: 0, w: 6, h: 4 }],
+      }).success,
+    ).toBe(false)
+    expect(
+      dashboardLayoutSchema.safeParse({
+        tiles: [{ id: 'a', reportId: '11111111-1111-4111-8111-111111111111', x: 0, y: 0, w: 0, h: 4 }],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('accepts param bindings of every supported source', () => {
+    const result = dashboardLayoutSchema.safeParse({
+      tiles: [{
+        id: 'a',
+        reportId: '11111111-1111-4111-8111-111111111111',
+        x: 0, y: 0, w: 6, h: 4,
+        paramBindings: {
+          companyId: { source: 'parameter', parameter: 'companyId' },
+          region: { source: 'literal', value: 'EU' },
+          customer: { source: 'record-field', recordField: 'id' },
+        },
+      }],
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('dashboardCreateSchema / dashboardUpdateSchema', () => {
+  test('reportCreateSchema-like contract: folderId + name + layout required', () => {
+    const ok = dashboardCreateSchema.safeParse({
+      folderId: '11111111-1111-4111-8111-111111111111',
+      name: 'Q2 Pipeline',
+      layout: { tiles: [] },
+    })
+    expect(ok.success).toBe(true)
+    const missing = dashboardCreateSchema.safeParse({
+      folderId: '11111111-1111-4111-8111-111111111111',
+      name: 'Q2 Pipeline',
+    })
+    expect(missing.success).toBe(false)
+  })
+
+  test('dashboardUpdateSchema requires the id', () => {
+    expect(dashboardUpdateSchema.safeParse({ name: 'x' }).success).toBe(false)
+    expect(
+      dashboardUpdateSchema.safeParse({
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'x',
+      }).success,
+    ).toBe(true)
   })
 })
 

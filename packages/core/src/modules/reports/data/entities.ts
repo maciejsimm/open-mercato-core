@@ -74,6 +74,58 @@ export class ReportFolderShare {
   updatedAt?: Date | null
 }
 
+@Entity({ tableName: 'reports_dashboards' })
+@Index({ name: 'reports_dashboards_folder_idx', properties: ['folderId'] })
+@Index({ name: 'reports_dashboards_owner_idx', properties: ['ownerUserId'] })
+@Unique({
+  name: 'reports_dashboards_folder_name_uniq',
+  expression:
+    'create unique index "reports_dashboards_folder_name_uniq" on "reports_dashboards" ("tenant_id","organization_id","folder_id","name") where "deleted_at" is null',
+})
+export class ReportDashboard {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'folder_id', type: 'uuid' })
+  folderId!: string
+
+  @Property({ name: 'owner_user_id', type: 'uuid' })
+  ownerUserId!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  @Property({ type: 'text', nullable: true })
+  description?: string | null
+
+  @Property({ name: 'layout_json', type: 'json' })
+  layoutJson!: unknown
+
+  @Property({ name: 'parameters_json', type: 'json' })
+  parametersJson: unknown = []
+
+  @Property({ name: 'version', type: 'int', default: 1 })
+  version: number = 1
+
+  @Property({ name: 'last_executed_at', type: Date, nullable: true })
+  lastExecutedAt?: Date | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
 @Entity({ tableName: 'reports_reports' })
 @Index({ name: 'reports_reports_folder_idx', properties: ['folderId'] })
 @Index({ name: 'reports_reports_owner_idx', properties: ['ownerUserId'] })
