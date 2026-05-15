@@ -424,3 +424,44 @@ export const dashboardRunSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
 })
 export type DashboardRunInput = z.infer<typeof dashboardRunSchema>
+
+// ---------- Embeds ----------
+
+export const embedArtifactTypeSchema = z.enum(['report', 'dashboard'])
+
+const embedParamBindingSchema = z.union([
+  z.object({ source: z.literal('literal'), value: z.unknown() }),
+  z.object({ source: z.literal('record-field'), recordField: z.string().min(1).max(120) }),
+])
+
+const embedSpotPattern = /^[a-zA-Z][a-zA-Z0-9_:.\-]+$/
+
+export const embedCreateSchema = z.object({
+  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern, { message: 'hostSpotId must look like a widget spot id' }),
+  hostEntityId: z.string().min(1).max(120),
+  artifactType: embedArtifactTypeSchema,
+  artifactId: uuid(),
+  paramBindings: z.record(z.string(), embedParamBindingSchema).optional(),
+  displayTitle: z.string().trim().max(200).optional().nullable(),
+  position: z.number().int().min(0).max(1000).optional(),
+  enabled: z.boolean().optional(),
+})
+export type EmbedCreateInput = z.infer<typeof embedCreateSchema>
+
+export const embedUpdateSchema = z.object({
+  id: uuid(),
+  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern).optional(),
+  hostEntityId: z.string().min(1).max(120).optional(),
+  artifactType: embedArtifactTypeSchema.optional(),
+  artifactId: uuid().optional(),
+  paramBindings: z.record(z.string(), embedParamBindingSchema).optional(),
+  displayTitle: z.string().trim().max(200).optional().nullable(),
+  position: z.number().int().min(0).max(1000).optional(),
+  enabled: z.boolean().optional(),
+})
+export type EmbedUpdateInput = z.infer<typeof embedUpdateSchema>
+
+export const embedDeleteSchema = z.object({
+  id: uuid(),
+})
+export type EmbedDeleteInput = z.infer<typeof embedDeleteSchema>

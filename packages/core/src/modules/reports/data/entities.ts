@@ -126,6 +126,56 @@ export class ReportDashboard {
   deletedAt?: Date | null
 }
 
+@Entity({ tableName: 'reports_embeds' })
+@Index({
+  name: 'reports_embeds_spot_idx',
+  expression:
+    'create index "reports_embeds_spot_idx" on "reports_embeds" ("tenant_id","host_spot_id","host_entity_id") where "deleted_at" is null and "enabled" = true',
+})
+export class ReportEmbed {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'host_spot_id', type: 'text' })
+  hostSpotId!: string
+
+  @Property({ name: 'host_entity_id', type: 'text' })
+  hostEntityId!: string
+
+  @Property({ name: 'artifact_type', type: 'text' })
+  artifactType!: 'report' | 'dashboard'
+
+  @Property({ name: 'artifact_id', type: 'uuid' })
+  artifactId!: string
+
+  @Property({ name: 'param_bindings_json', type: 'json' })
+  paramBindingsJson: unknown = {}
+
+  @Property({ name: 'display_title', type: 'text', nullable: true })
+  displayTitle?: string | null
+
+  @Property({ name: 'position', type: 'int', default: 0 })
+  position: number = 0
+
+  @Property({ name: 'enabled', type: 'boolean', default: true })
+  enabled: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
 @Entity({ tableName: 'reports_reports' })
 @Index({ name: 'reports_reports_folder_idx', properties: ['folderId'] })
 @Index({ name: 'reports_reports_owner_idx', properties: ['ownerUserId'] })

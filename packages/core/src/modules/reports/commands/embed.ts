@@ -1,0 +1,156 @@
+import type { EntityManager } from '@mikro-orm/postgresql'
+import { registerCommand, type CommandHandler } from '@open-mercato/shared/lib/commands'
+import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
+import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
+import type { CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
+import { ReportEmbed } from '../data/entities'
+import {
+  embedCreateSchema,
+  embedDeleteSchema,
+  embedUpdateSchema,
+  type EmbedCreateInput,
+  type EmbedDeleteInput,
+  type EmbedUpdateInput,
+} from '../data/validators'
+import { requireTenant } from './shared'
+
+const embedIndexer: CrudIndexerConfig<ReportEmbed> = {
+  entityType: 'reports:embed',
+}
+const embedEvents: CrudEventsConfig<ReportEmbed> = {
+  module: 'reports',
+  entity: 'embed',
+  persistent: true,
+  buildPayload: (ctx) => ({
+    id: ctx.identifiers.id,
+    organizationId: ctx.identifiers.organizationId,
+    tenantId: ctx.identifiers.tenantId,
+  }),
+}
+
+const createEmbedCommand: CommandHandler<EmbedCreateInput, { embedId: string }> = {
+  id: 'reports.embed.create',
+  async execute(rawInput, ctx) {
+    const input = embedCreateSchema.parse(rawInput)
+    const { tenantId, organizationId } = requireTenant(ctx)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+
+    const embed = em.create(ReportEmbed, {
+      organizationId,
+      tenantId,
+      hostSpotId: input.hostSpotId,
+      hostEntityId: input.hostEntityId,
+      artifactType: input.artifactType,
+      artifactId: input.artifactId,
+      paramBindingsJson: input.paramBindings ?? {},
+      displayTitle: input.displayTitle ?? null,
+      position: input.position ?? 0,
+      enabled: input.enabled ?? true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    em.persist(embed)
+    await em.flush()
+
+    const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
+    await emitCrudSideEffects({
+      dataEngine,
+      action: 'created',
+      entity: embed,
+      identifiers: { id: embed.id, organizationId, tenantId },
+      indexer: embedIndexer,
+      events: embedEvents,
+    })
+    return { embedId: embed.id }
+  },
+  buildLog: ({ result }) => ({
+    actionLabel: 'Create embed',
+    resourceKind: 'reports.embed',
+    resourceId: result.embedId,
+  }),
+}
+
+const updateEmbedCommand: CommandHandler<EmbedUpdateInput, { embedId: string }> = {
+  id: 'reports.embed.update',
+  async execute(rawInput, ctx) {
+    const input = embedUpdateSchema.parse(rawInput)
+    const { tenantId, organizationId } = requireTenant(ctx)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const embed = await em.findOne(ReportEmbed, {
+      id: input.id,
+      tenantId,
+      organizationId,
+      deletedAt: null,
+    } as Record<string, unknown>)
+    if (!embed) throw new CrudHttpError(404, { error: 'Embed not found' })
+
+    if (input.hostSpotId !== undefined) embed.hostSpotId = input.hostSpotId
+    if (input.hostEntityId !== undefined) embed.hostEntityId = input.hostEntityId
+    if (input.artifactType !== undefined) embed.artifactType = input.artifactType
+    if (input.artifactId !== undefined) embed.artifactId = input.artifactId
+    if (input.paramBindings !== undefined) embed.paramBindingsJson = input.paramBindings
+    if (input.displayTitle !== undefined) embed.displayTitle = input.displayTitle ?? null
+    if (input.position !== undefined) embed.position = input.position
+    if (input.enabled !== undefined) embed.enabled = input.enabled
+    embed.updatedAt = new Date()
+    await em.flush()
+
+    const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
+    await emitCrudSideEffects({
+      dataEngine,
+      action: 'updated',
+      entity: embed,
+      identifiers: { id: embed.id, organizationId, tenantId },
+      indexer: embedIndexer,
+      events: embedEvents,
+    })
+    return { embedId: embed.id }
+  },
+  buildLog: ({ result }) => ({
+    actionLabel: 'Update embed',
+    resourceKind: 'reports.embed',
+    resourceId: result.embedId,
+  }),
+}
+
+const deleteEmbedCommand: CommandHandler<EmbedDeleteInput, { embedId: string }> = {
+  id: 'reports.embed.delete',
+  async execute(rawInput, ctx) {
+    const input = embedDeleteSchema.parse(rawInput)
+    const { tenantId, organizationId } = requireTenant(ctx)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const embed = await em.findOne(ReportEmbed, {
+      id: input.id,
+      tenantId,
+      organizationId,
+      deletedAt: null,
+    } as Record<string, unknown>)
+    if (!embed) throw new CrudHttpError(404, { error: 'Embed not found' })
+
+    embed.deletedAt = new Date()
+    await em.flush()
+
+    const dataEngine = ctx.container.resolve('dataEngine') as DataEngine
+    await emitCrudSideEffects({
+      dataEngine,
+      action: 'deleted',
+      entity: embed,
+      identifiers: { id: embed.id, organizationId, tenantId },
+      indexer: embedIndexer,
+      events: embedEvents,
+    })
+    return { embedId: embed.id }
+  },
+  buildLog: ({ result }) => ({
+    actionLabel: 'Delete embed',
+    resourceKind: 'reports.embed',
+    resourceId: result.embedId,
+  }),
+}
+
+registerCommand(createEmbedCommand)
+registerCommand(updateEmbedCommand)
+registerCommand(deleteEmbedCommand)
+
+export { createEmbedCommand, updateEmbedCommand, deleteEmbedCommand }
