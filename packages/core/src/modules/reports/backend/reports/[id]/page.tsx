@@ -118,6 +118,18 @@ type DatasetFieldRow = {
   aggregations?: Aggregation[]
 }
 
+type ParameterKind = 'string' | 'number' | 'boolean' | 'date' | 'date_range' | 'fk' | 'enum'
+
+type ParameterDef = {
+  key: string
+  labelKey?: string
+  kind: ParameterKind
+  defaultValue?: unknown
+  required?: boolean
+  relatedDatasetId?: string
+  options?: Array<string | number>
+}
+
 type DatasetDetail = {
   id: string
   moduleId: string
@@ -254,6 +266,33 @@ function parseDefinition(raw: unknown, fallbackType: ReportType): Definition {
   }
 }
 
+function parseParameters(raw: unknown): ParameterDef[] {
+  if (!Array.isArray(raw)) return []
+  const allowedKinds: ParameterKind[] = ['string', 'number', 'boolean', 'date', 'date_range', 'fk', 'enum']
+  const out: ParameterDef[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const e = entry as Record<string, unknown>
+    if (typeof e.key !== 'string' || e.key.length === 0) continue
+    const kind = allowedKinds.includes(e.kind as ParameterKind) ? (e.kind as ParameterKind) : 'string'
+    const param: ParameterDef = {
+      key: e.key,
+      labelKey: typeof e.labelKey === 'string' && e.labelKey.length > 0 ? e.labelKey : undefined,
+      kind,
+      defaultValue: e.defaultValue,
+      required: typeof e.required === 'boolean' ? e.required : undefined,
+      relatedDatasetId: typeof e.relatedDatasetId === 'string' ? e.relatedDatasetId : undefined,
+      options: Array.isArray(e.options)
+        ? e.options
+            .map((v) => (typeof v === 'string' || typeof v === 'number' ? v : null))
+            .filter((v): v is string | number => v !== null)
+        : undefined,
+    }
+    out.push(param)
+  }
+  return out
+}
+
 function migrateDefinition(prev: Definition, nextType: ReportType): Definition {
   if (prev.type === nextType) return prev
   const base = defaultDefinition(nextType)
@@ -363,6 +402,7 @@ export default function ReportBuilderPage() {
   const [name, setName] = React.useState('')
   const [description, setDescription] = React.useState('')
   const [definition, setDefinition] = React.useState<Definition>(defaultDefinition('flat_list'))
+  const [parameters, setParameters] = React.useState<ParameterDef[]>([])
   const [isSaving, setIsSaving] = React.useState(false)
   const [isRunning, setIsRunning] = React.useState(false)
   const [isDirty, setIsDirty] = React.useState(false)
@@ -399,6 +439,7 @@ export default function ReportBuilderPage() {
         setName(found.name)
         setDescription(found.description ?? '')
         setDefinition(parseDefinition(found.definition, found.type))
+        setParameters(parseParameters(found.parameters))
 
         const datasetCall = await apiCall<DatasetDetail>(
           `/api/reports/datasets/${encodeURIComponent(found.datasetId)}`,
@@ -474,6 +515,7 @@ export default function ReportBuilderPage() {
           name: name.trim() || report.name,
           description: description.trim() ? description.trim() : null,
           definition,
+          parameters,
           version: report.version,
         }),
       })
@@ -486,6 +528,7 @@ export default function ReportBuilderPage() {
             description: description.trim() || null,
             type: definition.type,
             definition,
+            parameters,
             version: prev.version + 1,
           }
         : prev)
@@ -495,7 +538,7 @@ export default function ReportBuilderPage() {
     } finally {
       setIsSaving(false)
     }
-  }, [canEdit, definition, description, name, report, t])
+  }, [canEdit, definition, description, name, parameters, report, t])
 
   const handleRun = React.useCallback(async () => {
     if (!report) return
@@ -625,6 +668,12 @@ export default function ReportBuilderPage() {
                   fields={datasetFields}
                   canEdit={canEdit}
                   onChange={(next) => { setDefinition(next); markDirty() }}
+                  t={t}
+                />
+                <ParametersSection
+                  parameters={parameters}
+                  canEdit={canEdit}
+                  onChange={(next) => { setParameters(next); markDirty() }}
                   t={t}
                 />
               </div>
@@ -2143,6 +2192,275 @@ function renderLiteralValueInput({ field, op, value, onChange, canEdit, isBetwee
       disabled={!canEdit}
       placeholder={TEXT_LIKE_KINDS.has(field.kind) ? t('reports.detail.filters.textPlaceholder', 'value') : t('reports.detail.filters.fkPlaceholder', 'fk id')}
       className="h-8 w-44 text-xs"
+    />
+  )
+}
+
+// ---------- Parameters ----------
+
+const PARAMETER_KINDS: ParameterKind[] = ['string', 'number', 'boolean', 'date', 'date_range', 'fk', 'enum']
+const PARAM_KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
+type ParametersSectionProps = {
+  parameters: ParameterDef[]
+  canEdit: boolean
+  onChange: (next: ParameterDef[]) => void
+  t: ReturnType<typeof useT>
+}
+
+function ParametersSection({ parameters, canEdit, onChange, t }: ParametersSectionProps) {
+  const updateAt = (idx: number, patch: Partial<ParameterDef>) => {
+    const next = parameters.map((p, i) => (i === idx ? { ...p, ...patch } : p))
+    onChange(next)
+  }
+  const removeAt = (idx: number) => onChange(parameters.filter((_, i) => i !== idx))
+  const add = () => {
+    const used = new Set(parameters.map((p) => p.key))
+    let candidate = 'param1'
+    let n = 1
+    while (used.has(candidate)) {
+      n += 1
+      candidate = `param${n}`
+    }
+    onChange([...parameters, { key: candidate, kind: 'string', required: false }])
+  }
+
+  return (
+    <section className="space-y-3 rounded-md border border-border bg-card p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.parameters', 'Parameters')}</h2>
+        <span className="text-xs text-muted-foreground">
+          {parameters.length > 0
+            ? t('reports.detail.parameters.count', '{count} declared').replace('{count}', String(parameters.length))
+            : t('reports.detail.parameters.none', 'No parameters')}
+        </span>
+      </div>
+      {parameters.length === 0 ? (
+        <p className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 px-3 py-3 text-center text-sm text-muted-foreground">
+          {t('reports.detail.parameters.emptyHint', 'Declare named parameters that bind to filters (e.g. companyId, dateRange).')}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {parameters.map((param, idx) => (
+            <ParameterRow
+              key={`${param.key}-${idx}`}
+              param={param}
+              canEdit={canEdit}
+              keyError={validateParameterKey(param.key, parameters, idx, t)}
+              onChange={(patch) => updateAt(idx, patch)}
+              onRemove={() => removeAt(idx)}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+      <div className="pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={add}
+          disabled={!canEdit}
+        >
+          <Plus className="size-3.5" aria-hidden />
+          <span>{t('reports.detail.parameters.add', 'Add parameter')}</span>
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function validateParameterKey(
+  key: string,
+  all: ParameterDef[],
+  selfIndex: number,
+  t: ReturnType<typeof useT>,
+): string | null {
+  if (!key.trim()) return t('reports.detail.parameters.errorEmptyKey', 'Key is required')
+  if (!PARAM_KEY_PATTERN.test(key)) return t('reports.detail.parameters.errorBadKey', 'Key must start with a letter or _ and contain only letters, digits, and _')
+  for (let i = 0; i < all.length; i++) {
+    if (i !== selfIndex && all[i].key === key) return t('reports.detail.parameters.errorDuplicateKey', 'Duplicate key')
+  }
+  return null
+}
+
+type ParameterRowProps = {
+  param: ParameterDef
+  canEdit: boolean
+  keyError: string | null
+  onChange: (patch: Partial<ParameterDef>) => void
+  onRemove: () => void
+  t: ReturnType<typeof useT>
+}
+
+function ParameterRow({ param, canEdit, keyError, onChange, onRemove, t }: ParameterRowProps) {
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-background p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.key', 'Key')}</span>
+          <Input
+            value={param.key}
+            onChange={(e) => onChange({ key: e.target.value })}
+            disabled={!canEdit}
+            className={cn('h-8 w-44 text-sm font-mono', keyError ? 'border-status-error-border' : '')}
+            aria-invalid={keyError ? 'true' : undefined}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.label', 'Label key')}</span>
+          <Input
+            value={param.labelKey ?? ''}
+            onChange={(e) => onChange({ labelKey: e.target.value || undefined })}
+            disabled={!canEdit}
+            placeholder={t('reports.detail.parameters.labelPlaceholder', 'module.params.<key>.label')}
+            className="h-8 w-64 text-sm"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.kind', 'Kind')}</span>
+          <select
+            value={param.kind}
+            onChange={(e) => onChange({ kind: e.target.value as ParameterKind })}
+            disabled={!canEdit}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          >
+            {PARAMETER_KINDS.map((k) => (
+              <option key={k} value={k}>{t(`reports.detail.parameters.kindLabel.${k}`, k)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="mt-5 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(param.required)}
+            onChange={(e) => onChange({ required: e.target.checked || undefined })}
+            disabled={!canEdit}
+          />
+          {t('reports.detail.parameters.required', 'Required')}
+        </label>
+        <button
+          type="button"
+          className="ml-auto mt-5 rounded-sm p-1 hover:bg-muted disabled:opacity-50"
+          onClick={() => canEdit && onRemove()}
+          disabled={!canEdit}
+          aria-label={t('reports.detail.parameters.remove', 'Remove parameter')}
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
+
+      {keyError ? (
+        <p className="text-xs text-status-error-text">{keyError}</p>
+      ) : null}
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.defaultValue', 'Default value')}</span>
+          {renderParameterDefaultInput(param, canEdit, (next) => onChange({ defaultValue: next }), t)}
+        </label>
+        {param.kind === 'fk' ? (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.relatedDatasetId', 'Related dataset id')}</span>
+            <Input
+              value={param.relatedDatasetId ?? ''}
+              onChange={(e) => onChange({ relatedDatasetId: e.target.value || undefined })}
+              disabled={!canEdit}
+              placeholder={t('reports.detail.parameters.relatedDatasetIdPlaceholder', 'module.entity')}
+              className="h-8 w-56 text-sm font-mono"
+            />
+          </label>
+        ) : null}
+        {param.kind === 'enum' ? (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.parameters.options', 'Options')}</span>
+            <Input
+              value={(param.options ?? []).join(',')}
+              onChange={(e) => {
+                const parts = e.target.value.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+                onChange({ options: parts.length > 0 ? parts : undefined })
+              }}
+              disabled={!canEdit}
+              placeholder={t('reports.detail.parameters.optionsPlaceholder', 'opt1, opt2, …')}
+              className="h-8 w-64 text-sm"
+            />
+          </label>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function renderParameterDefaultInput(
+  param: ParameterDef,
+  canEdit: boolean,
+  onChange: (next: unknown) => void,
+  t: ReturnType<typeof useT>,
+): React.ReactNode {
+  const value = param.defaultValue
+  if (param.kind === 'boolean') {
+    return (
+      <select
+        value={value === true ? 'true' : value === false ? 'false' : ''}
+        onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value === 'true')}
+        disabled={!canEdit}
+        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+      >
+        <option value="">{t('reports.detail.parameters.defaultValueNone', '— none —')}</option>
+        <option value="true">{t('reports.detail.filters.booleanTrue', 'true')}</option>
+        <option value="false">{t('reports.detail.filters.booleanFalse', 'false')}</option>
+      </select>
+    )
+  }
+  if (param.kind === 'number') {
+    return (
+      <Input
+        type="number"
+        value={value == null ? '' : String(value)}
+        onChange={(e) => {
+          const raw = e.target.value
+          if (raw.trim() === '') return onChange(undefined)
+          const num = Number(raw)
+          if (Number.isFinite(num)) onChange(num)
+        }}
+        disabled={!canEdit}
+        className="h-8 w-36 text-sm"
+      />
+    )
+  }
+  if (param.kind === 'date') {
+    return (
+      <Input
+        type="date"
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value || undefined)}
+        disabled={!canEdit}
+        className="h-8 w-44 text-sm"
+      />
+    )
+  }
+  if (param.kind === 'date_range') {
+    return (
+      <select
+        value={typeof value === 'string' ? value : ''}
+        onChange={(e) => onChange(e.target.value || undefined)}
+        disabled={!canEdit}
+        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+      >
+        <option value="">{t('reports.detail.parameters.defaultValueNone', '— none —')}</option>
+        {DATE_RANGE_TOKENS.map((token) => (
+          <option key={token} value={token}>{t(`reports.detail.filters.dateRangeToken.${token}`, token)}</option>
+        ))}
+      </select>
+    )
+  }
+  // string / enum / fk: free text
+  return (
+    <Input
+      value={value == null ? '' : String(value)}
+      onChange={(e) => onChange(e.target.value || undefined)}
+      disabled={!canEdit}
+      className="h-8 w-56 text-sm"
     />
   )
 }

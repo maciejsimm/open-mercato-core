@@ -39,7 +39,7 @@
 | 3 | 3.3a | Builder canvas — type switcher + per-type drop zones (click-to-add) + spinner fix on detail page | done | bc40a0bb4 |
 | 3 | 3.3b | Builder canvas — drag fields from FieldList into per-type zones via `@dnd-kit` (alongside click-to-add) | done | 525857ed4 |
 | 3 | 3.3c | Builder canvas — filters editor typed by field kind (literal + date_range) | done | d455525f6 |
-| 3 | 3.3d | Builder canvas — parameters declaration UI | todo | — |
+| 3 | 3.3d | Builder canvas — parameters declaration UI | done | f47082520 |
 | 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | done | 697550a55 |
 | 3 | 3.5 | `lib/chart-spec.ts` + `<ReportChart>` adapter | done | bd0838eef |
 | 3 | 3.5b | Extend `lib/execute.ts` to dispatch grouped/pivot/chart/summary through the aggregator; run route supports all types | done | 400bf8a79 |
