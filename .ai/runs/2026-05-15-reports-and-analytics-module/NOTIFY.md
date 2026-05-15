@@ -99,3 +99,11 @@
 - UI verification: skipped at this checkpoint. The user already verified the URL fix manually (created a report). The detail-page spinner is deferred to Step 3.3 which will rewrite that page entirely. The new chart wrappers and pure-logic libs have no UI surface to exercise until Step 3.5 (`<ReportChart>` adapter) lands.
 - Decision: Step 3.3 (builder canvas UI) skipped from this resume on purpose — it is the single largest step in Phase 3 (~800-1000 LOC). Resume HANDOFF offers two paths: continue with 3.3 (big) or interlude through 3.5 (small) first.
 - Bug-deferral note: the endless-spinner bug on `/backend/reports/<id>` is documented in HANDOFF with a provisional fix theory (drop `t` from the load `useEffect` deps and use a ref). It is left unfixed because Step 3.3 will rewrite that page wholesale.
+
+## 2026-05-15T22:08:00Z — Phase 3 mid-stream update
+- Steps shipped since checkpoint 5: 3.3a (bc40a0bb4), 3.5 (bd0838eef), 3.5b (400bf8a79).
+- Aggregated execution is live: the run route serves all five report types via `executeReport`. The detail-page <ReportChart> preview plots immediately for chart definitions.
+- DSL `ChartSpec` reconciled to the persisted `{xField, yFields}` shape (was `{dimension, series[]}` — a stale Step-1.1 spec the validators and UI never adopted).
+- Reports unit tests: 195/195 passing across 11 suites (+6 new executor tests).
+- No checkpoint commit at this point — only 3 steps since checkpoint 5; next checkpoint at 5 (after two more steps).
+- Decision: pause here so the user can verify end-to-end aggregated run in browser before picking the next direction (3.6 export, 3.7 dashboards, or builder polish 3.3b/c/d).
