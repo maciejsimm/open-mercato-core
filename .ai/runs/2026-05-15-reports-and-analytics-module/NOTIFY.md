@@ -107,3 +107,10 @@
 - Reports unit tests: 195/195 passing across 11 suites (+6 new executor tests).
 - No checkpoint commit at this point — only 3 steps since checkpoint 5; next checkpoint at 5 (after two more steps).
 - Decision: pause here so the user can verify end-to-end aggregated run in browser before picking the next direction (3.6 export, 3.7 dashboards, or builder polish 3.3b/c/d).
+
+## 2026-05-15T22:25:00Z — checkpoint 6 — builder polish complete (3.3a..3.3d closed)
+- Steps covered this checkpoint: 3.3a (bc40a0bb4), 3.5 (bd0838eef), 3.5b (400bf8a79), 3.3b (525857ed4), 3.3c (d455525f6), 3.3d (f47082520). Total 6 steps since checkpoint 5.
+- Touched packages: @open-mercato/core (reports module — builder rewrite, aggregator wiring, chart adapter, filters editor, parameters editor), @open-mercato/shared (ChartSpec reconciliation), @open-mercato/ui (chart wrappers from 3.4 — covered by checkpoint 5).
+- Validation: yarn generate clean (13.6s), tsc clean for core reports, jest 195/195 across 11 suites, i18n sync clean (advisory unused-keys count unchanged at 3606).
+- UI verification: skipped at checkpoint level — no reports .ai/qa Playwright scenario yet (5.6 covers it); user verified URL fix manually earlier in this session. Builder polish lacks UI-level tests; recommended to land a smoke scenario alongside Step 3.7 or as a separate Phase 5 prep step.
+- Decision: pause here and surface to user. Next step Step 3.6 (Export route — CSV + XLSX) is the highest-leverage follow-up; Step 3.7 (Dashboards) is the next major scope. Filters↔Parameters bridge is a small polish item worth picking up alongside.
