@@ -37,3 +37,11 @@
 - 11 code Steps shipped across Phase 1 (1.1..1.10) and Phase 2 (2.1). Stop point chosen because remaining Phase 2 Steps require either a live DB (validators wired to entities, commands, CRUD routes) or a running dev server (UI Steps 2.8–2.9), and neither is available in this autonomous session.
 - Run status: in-progress. Resume via auto-continue-pr-loop once the PR is opened, or pick up Step 2.2 locally.
 - Branch lives only on local disk; the user must `git push -u origin feat/reports-and-analytics-module` once credentials are set up.
+
+## 2026-05-15T16:29:46Z — auto-continue-pr-loop resume (no PR — local-only)
+- Resumed by: @maciejsimm
+- Resume point: Phase 2 Step 2.2 (source: PLAN.md Tasks table — first row with Status != done)
+- PR head SHA: f6b520fd7 (still local, branch not yet pushed)
+- Reason for local-only resume: gh CLI still unavailable; treating the run as a continuation of auto-create-pr-loop. PR creation, label normalization, and auto-review-pr autofix pass remain user actions.
+- Goal of this resume: drive Phase 2 data-layer Steps (2.2 validators → 2.7 setup defaults) that do not require a live DB or running dev server. UI Steps 2.8–2.10 will stay todo until a session with a runnable dev environment.
+- 11 code Steps already landed before this resume; safety stop at 20 Steps means at most 9 more Steps. Realistic target this resume: 2.2..2.7 (6 Steps).
