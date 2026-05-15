@@ -93,17 +93,214 @@ describe('reportDefinitionSchema (flat_list)', () => {
     ).toBe(false)
   })
 
-  test('discriminates other definition types (placeholder until Phase 3)', () => {
-    // Placeholders accept any shape so saves do not lose data, but the
-    // execution engine will refuse them until Phase 3.
-    expect(reportDefinitionSchema.safeParse({ type: 'grouped' }).success).toBe(true)
-    expect(reportDefinitionSchema.safeParse({ type: 'pivot' }).success).toBe(true)
-    expect(reportDefinitionSchema.safeParse({ type: 'chart' }).success).toBe(true)
-    expect(reportDefinitionSchema.safeParse({ type: 'summary' }).success).toBe(true)
+  test('rejects bare type discriminator without required arms (post Phase 3.2)', () => {
+    // Pre-Phase 3.2 these accepted any shape via passthrough. They are now
+    // strictly validated and must include their required fields.
+    expect(reportDefinitionSchema.safeParse({ type: 'grouped' }).success).toBe(false)
+    expect(reportDefinitionSchema.safeParse({ type: 'pivot' }).success).toBe(false)
+    expect(reportDefinitionSchema.safeParse({ type: 'chart' }).success).toBe(false)
+    expect(reportDefinitionSchema.safeParse({ type: 'summary' }).success).toBe(false)
   })
 
   test('rejects unknown discriminator value', () => {
     expect(reportDefinitionSchema.safeParse({ type: 'bogus' }).success).toBe(false)
+  })
+})
+
+describe('reportDefinitionSchema (grouped)', () => {
+  test('accepts a minimal grouped definition with defaults', () => {
+    const parsed = reportDefinitionSchema.safeParse({
+      type: 'grouped',
+      fields: ['region', 'amount'],
+      groupBy: ['region'],
+      measures: [{ field: 'amount', aggregation: 'sum' }],
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success && parsed.data.type === 'grouped') {
+      expect(parsed.data.filters).toEqual([])
+      expect(parsed.data.sort).toEqual([])
+    }
+  })
+
+  test('rejects grouped without measures', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'grouped',
+        fields: ['region'],
+        groupBy: ['region'],
+        measures: [],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects grouped without groupBy', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'grouped',
+        fields: ['region'],
+        groupBy: [],
+        measures: [{ field: 'amount', aggregation: 'sum' }],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects duplicate measure aliases', () => {
+    const parsed = reportDefinitionSchema.safeParse({
+      type: 'grouped',
+      fields: ['region', 'amount'],
+      groupBy: ['region'],
+      measures: [
+        { field: 'amount', aggregation: 'sum', alias: 'total' },
+        { field: 'amount', aggregation: 'avg', alias: 'total' },
+      ],
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  test('rejects bogus aggregation', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'grouped',
+        fields: ['region'],
+        groupBy: ['region'],
+        measures: [{ field: 'amount', aggregation: 'median' }],
+      }).success,
+    ).toBe(false)
+  })
+})
+
+describe('reportDefinitionSchema (pivot)', () => {
+  test('accepts a minimal pivot', () => {
+    const parsed = reportDefinitionSchema.safeParse({
+      type: 'pivot',
+      rows: ['region'],
+      cols: ['segment'],
+      value: { field: 'amount', aggregation: 'sum' },
+    })
+    expect(parsed.success).toBe(true)
+  })
+
+  test('rejects pivot with overlapping row + col fields', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'pivot',
+        rows: ['region'],
+        cols: ['region'],
+        value: { field: 'amount', aggregation: 'sum' },
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects pivot missing value', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'pivot',
+        rows: ['region'],
+        cols: ['segment'],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects pivot with empty rows or cols', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'pivot',
+        rows: [],
+        cols: ['segment'],
+        value: { field: 'amount', aggregation: 'sum' },
+      }).success,
+    ).toBe(false)
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'pivot',
+        rows: ['region'],
+        cols: [],
+        value: { field: 'amount', aggregation: 'sum' },
+      }).success,
+    ).toBe(false)
+  })
+})
+
+describe('reportDefinitionSchema (summary)', () => {
+  test('accepts measures + empty filters default', () => {
+    const parsed = reportDefinitionSchema.safeParse({
+      type: 'summary',
+      measures: [
+        { field: 'amount', aggregation: 'sum' },
+        { field: 'amount', aggregation: 'avg' },
+      ],
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success && parsed.data.type === 'summary') {
+      expect(parsed.data.filters).toEqual([])
+    }
+  })
+
+  test('rejects summary with no measures', () => {
+    expect(
+      reportDefinitionSchema.safeParse({ type: 'summary', measures: [] }).success,
+    ).toBe(false)
+  })
+})
+
+describe('reportDefinitionSchema (chart)', () => {
+  test('accepts a minimal bar chart referencing a single measure', () => {
+    const parsed = reportDefinitionSchema.safeParse({
+      type: 'chart',
+      chart: { type: 'bar', xField: 'region', yFields: ['total'] },
+      groupBy: ['region'],
+      measures: [{ field: 'amount', aggregation: 'sum', alias: 'total' }],
+    })
+    expect(parsed.success).toBe(true)
+  })
+
+  test('rejects pie chart with more than one yField', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'chart',
+        chart: { type: 'pie', xField: 'region', yFields: ['total', 'count'] },
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects scatter chart with more than one yField', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'chart',
+        chart: { type: 'scatter', xField: 'x', yFields: ['y1', 'y2'] },
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects chart whose xField is not in declared groupBy', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'chart',
+        chart: { type: 'bar', xField: 'region', yFields: ['total'] },
+        groupBy: ['country'],
+        measures: [{ field: 'amount', aggregation: 'sum', alias: 'total' }],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('rejects chart whose yField is not produced by any measure alias', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'chart',
+        chart: { type: 'bar', xField: 'region', yFields: ['totalThatDoesNotExist'] },
+        groupBy: ['region'],
+        measures: [{ field: 'amount', aggregation: 'sum', alias: 'total' }],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('accepts chart without declared groupBy/measures (free-form chart on raw rows)', () => {
+    expect(
+      reportDefinitionSchema.safeParse({
+        type: 'chart',
+        chart: { type: 'line', xField: 'created_at', yFields: ['amount'] },
+      }).success,
+    ).toBe(true)
   })
 })
 

@@ -35,7 +35,7 @@
 | 2 | 2.11-fix | Fix `/backend/reports/*` URLs in list + new pages (auto-discovery collapses duplicate prefix) | done | 78b7d9071 |
 | 2 | 2.12-fix | MikroORM v7 compatibility (decorators/legacy import + `em.remove(...).flush()`) after main merge | done | 7f7b8aa30 |
 | 3 | 3.1 | `lib/aggregator.ts` — in-memory group-by + pivot + measures + unit tests | done | 8005f6ed6 |
-| 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | todo | — |
+| 3 | 3.2 | Extend validators for `grouped`, `pivot`, `chart`, `summary` types | done | 5110a7bf2 |
 | 3 | 3.3 | Builder canvas UI — type switcher, drag-and-drop fields (uses `@dnd-kit`) | todo | — |
 | 3 | 3.4 | Add missing chart wrappers (`AreaChart`, `DonutChart`, `ScatterChart`, `ComboChart`) to `packages/ui/src/backend/charts/` | todo | — |
 | 3 | 3.5 | `lib/chart-spec.ts` + `<ReportChart>` adapter | todo | — |

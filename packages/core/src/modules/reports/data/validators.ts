@@ -143,35 +143,148 @@ const flatListDefinitionSchema = z.object({
   limit: z.number().int().min(1).max(100_000).optional(),
 })
 
-const measureExprSchema = z.object({
+export const measureExprSchema = z.object({
   field: z.string().min(1),
   aggregation: z.enum(['count', 'count_distinct', 'sum', 'avg', 'min', 'max']),
   alias: z.string().trim().min(1).max(100).optional(),
 })
+export type MeasureExprInput = z.infer<typeof measureExprSchema>
 
-// Discriminator-ready but Phase 1 only ships the flat_list arm. The remaining
-// arms (grouped, pivot, chart, summary) will be added in Phase 3 alongside
-// the in-memory aggregator. They are declared here as `unknown` placeholders
-// so any save attempt fails closed.
-const groupedDefinitionPlaceholder = z.object({
-  type: z.literal('grouped'),
-}).passthrough()
-const pivotDefinitionPlaceholder = z.object({
-  type: z.literal('pivot'),
-}).passthrough()
-const chartDefinitionPlaceholder = z.object({
-  type: z.literal('chart'),
-}).passthrough()
-const summaryDefinitionPlaceholder = z.object({
+export const chartTypeSchema = z.enum([
+  'bar',
+  'line',
+  'pie',
+  'donut',
+  'area',
+  'scatter',
+  'combo',
+])
+export type ChartTypeInput = z.infer<typeof chartTypeSchema>
+
+export const chartSpecSchema = z
+  .object({
+    type: chartTypeSchema,
+    xField: z.string().min(1),
+    yFields: z.array(z.string().min(1)).min(1).max(20),
+    stacked: z.boolean().optional(),
+    showLegend: z.boolean().optional(),
+    xAxisLabel: z.string().trim().max(120).optional(),
+    yAxisLabel: z.string().trim().max(120).optional(),
+    palette: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).max(20).optional(),
+  })
+  .superRefine((spec, ctx) => {
+    if ((spec.type === 'pie' || spec.type === 'donut') && spec.yFields.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['yFields'],
+        message: `${spec.type} charts require exactly one yField`,
+      })
+    }
+    if (spec.type === 'scatter' && spec.yFields.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['yFields'],
+        message: 'scatter charts require exactly one yField',
+      })
+    }
+  })
+export type ChartSpecInput = z.infer<typeof chartSpecSchema>
+
+const fieldsListSchema = z.array(z.string().min(1)).min(1).max(100)
+const groupByListSchema = z.array(z.string().min(1)).min(1).max(10)
+const measuresListSchema = z.array(measureExprSchema).min(1).max(20)
+
+const groupedDefinitionSchema = z
+  .object({
+    type: z.literal('grouped'),
+    fields: fieldsListSchema,
+    groupBy: groupByListSchema,
+    measures: measuresListSchema,
+    filters: z.array(filterSchema).default([]),
+    sort: z.array(sortSchema).default([]),
+    limit: z.number().int().min(1).max(100_000).optional(),
+  })
+  .superRefine((def, ctx) => {
+    const aliases = new Set<string>()
+    def.measures.forEach((m, idx) => {
+      if (!m.alias) return
+      if (aliases.has(m.alias)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['measures', idx, 'alias'],
+          message: `Duplicate measure alias '${m.alias}'`,
+        })
+      }
+      aliases.add(m.alias)
+    })
+  })
+
+const pivotDefinitionSchema = z
+  .object({
+    type: z.literal('pivot'),
+    rows: z.array(z.string().min(1)).min(1).max(10),
+    cols: z.array(z.string().min(1)).min(1).max(10),
+    value: measureExprSchema,
+    filters: z.array(filterSchema).default([]),
+  })
+  .superRefine((def, ctx) => {
+    const rows = new Set(def.rows)
+    for (const col of def.cols) {
+      if (rows.has(col)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['cols'],
+          message: `Field '${col}' cannot appear in both rows and cols`,
+        })
+      }
+    }
+  })
+
+const chartDefinitionSchema = z
+  .object({
+    type: z.literal('chart'),
+    chart: chartSpecSchema,
+    filters: z.array(filterSchema).default([]),
+    groupBy: z.array(z.string().min(1)).max(10).optional(),
+    measures: z.array(measureExprSchema).max(20).optional(),
+    limit: z.number().int().min(1).max(100_000).optional(),
+  })
+  .superRefine((def, ctx) => {
+    const xField = def.chart.xField
+    const yFields = def.chart.yFields
+    if (def.groupBy && def.groupBy.length > 0 && !def.groupBy.includes(xField)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['chart', 'xField'],
+        message: `chart.xField '${xField}' must be one of the groupBy keys when groupBy is set`,
+      })
+    }
+    if (def.measures && def.measures.length > 0) {
+      const aliases = new Set(def.measures.map((m) => m.alias ?? `${m.aggregation}_${m.field}`))
+      for (const y of yFields) {
+        if (!aliases.has(y)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['chart', 'yFields'],
+            message: `chart.yFields contains '${y}' which is not produced by any declared measure alias`,
+          })
+        }
+      }
+    }
+  })
+
+const summaryDefinitionSchema = z.object({
   type: z.literal('summary'),
-}).passthrough()
+  measures: measuresListSchema,
+  filters: z.array(filterSchema).default([]),
+})
 
 export const reportDefinitionSchema = z.discriminatedUnion('type', [
   flatListDefinitionSchema,
-  groupedDefinitionPlaceholder,
-  pivotDefinitionPlaceholder,
-  chartDefinitionPlaceholder,
-  summaryDefinitionPlaceholder,
+  groupedDefinitionSchema,
+  pivotDefinitionSchema,
+  chartDefinitionSchema,
+  summaryDefinitionSchema,
 ])
 export type ReportDefinitionInput = z.infer<typeof reportDefinitionSchema>
 
