@@ -172,6 +172,7 @@ export async function GET(req: Request) {
         parentFolderId: f.parentFolderId ?? null,
         kind: f.kind,
         ownerUserId: f.ownerUserId ?? null,
+        ownedByViewer: f.kind === 'private' && f.ownerUserId === auth.sub,
         name: f.name,
         position: f.position,
         permission: perm,
