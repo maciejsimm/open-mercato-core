@@ -15,8 +15,8 @@
 | 1 | 1.1 | Add `defineDataset` DSL + types in `packages/shared/src/modules/reports/` | done | 75c575599 |
 | 1 | 1.2 | Extend CLI generator to discover `<module>/reports.ts` and emit `reports-datasets.generated.ts` | done | a29689c34 |
 | 1 | 1.3 | Scaffold reports module: `index.ts`, `acl.ts`, `setup.ts`, `events.ts`, `translations.ts`, `encryption.ts` | done | 0a26b027d |
-| 1 | 1.4 | Build `lib/field-redact.ts` + unit tests | done | pending |
-| 1 | 1.5 | Build `lib/parameters.ts` + `lib/date-ranges.ts` + unit tests | todo | — |
+| 1 | 1.4 | Build `lib/field-redact.ts` + unit tests | done | 87a00e900 |
+| 1 | 1.5 | Build `lib/parameters.ts` + `lib/date-ranges.ts` + unit tests | done | pending |
 | 1 | 1.6 | Build `lib/datasets-registry.ts` (runtime view over generated registry) + tests | todo | — |
 | 1 | 1.7 | Build `lib/query-translator.ts` for `flat_list` definitions + unit tests | todo | — |
 | 1 | 1.8 | Build `lib/execute.ts` orchestrator (sync flat_list path) + unit tests | todo | — |
