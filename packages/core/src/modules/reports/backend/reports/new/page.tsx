@@ -129,7 +129,7 @@ export default function ReportsNewPage() {
         throw createCrudFormError(t('reports.new.error.create', 'Failed to create report.'))
       }
       flash(t('reports.new.success', 'Report created.'), 'success')
-      router.push(`/backend/reports/reports/${response.id}`)
+      router.push(`/backend/reports/${response.id}`)
     } catch (err) {
       if (err && typeof err === 'object' && 'message' in err) throw err
       throw createCrudFormError(t('reports.new.error.create', 'Failed to create report.'))

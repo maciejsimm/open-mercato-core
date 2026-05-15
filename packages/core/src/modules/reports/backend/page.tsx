@@ -358,7 +358,7 @@ export default function ReportsListPage() {
         header: t('reports.list.columns.name', 'Name'),
         cell: ({ row }) => (
           <Link
-            href={`/backend/reports/reports/${row.original.id}`}
+            href={`/backend/reports/${row.original.id}`}
             className="font-medium hover:underline"
           >
             {row.original.name}
@@ -387,8 +387,8 @@ export default function ReportsListPage() {
   }, [t, typeLabel])
 
   const newReportHref = selectedFolderId
-    ? `/backend/reports/reports/new?folderId=${encodeURIComponent(selectedFolderId)}`
-    : '/backend/reports/reports/new'
+    ? `/backend/reports/new?folderId=${encodeURIComponent(selectedFolderId)}`
+    : '/backend/reports/new'
 
   const newReportButton = (
     <Button asChild>
@@ -450,18 +450,18 @@ export default function ReportsListPage() {
               onFiltersApply={handleFiltersApply}
               onFiltersClear={handleFiltersClear}
               entityIds={['reports:report']}
-              onRowClick={(row) => router.push(`/backend/reports/reports/${row.id}`)}
+              onRowClick={(row) => router.push(`/backend/reports/${row.id}`)}
               rowActions={(row) => {
                 const items = [
                   {
                     id: 'open',
                     label: t('reports.list.actions.open', 'Open'),
-                    onSelect: () => router.push(`/backend/reports/reports/${row.id}`),
+                    onSelect: () => router.push(`/backend/reports/${row.id}`),
                   },
                   {
                     id: 'open-new-tab',
                     label: t('reports.list.actions.openInNewTab', 'Open in new tab'),
-                    onSelect: () => window.open(`/backend/reports/reports/${row.id}`, '_blank', 'noopener'),
+                    onSelect: () => window.open(`/backend/reports/${row.id}`, '_blank', 'noopener'),
                   },
                 ]
                 if (row.permission === 'edit') {
