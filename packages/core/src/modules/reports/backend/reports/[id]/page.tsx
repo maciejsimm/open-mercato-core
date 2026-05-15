@@ -33,7 +33,20 @@ type ChartType = 'bar' | 'line' | 'pie' | 'donut' | 'area' | 'scatter' | 'combo'
 
 type MeasureExpr = { field: string; aggregation: Aggregation; alias?: string }
 type SortShape = { field: string; dir: 'asc' | 'desc' }
-type FilterShape = Record<string, unknown>
+
+type FilterOp =
+  | 'eq' | 'ne' | 'in' | 'nin' | 'gt' | 'gte' | 'lt' | 'lte'
+  | 'contains' | 'starts_with' | 'ends_with'
+  | 'is_null' | 'is_not_null' | 'between'
+
+type DateRangeToken =
+  | 'today' | 'yesterday' | 'last_24h' | 'last_7_days' | 'last_30_days'
+  | 'mtd' | 'last_month' | 'qtd' | 'last_quarter' | 'ytd' | 'last_year' | 'custom'
+
+type LiteralFilter = { kind: 'literal'; field: string; op: FilterOp; value?: unknown }
+type ParameterFilter = { kind: 'parameter'; field: string; op: FilterOp; parameter: string }
+type DateRangeFilter = { kind: 'date_range'; field: string; token: DateRangeToken; from?: string; to?: string }
+type FilterShape = LiteralFilter | ParameterFilter | DateRangeFilter
 type ChartSpec = {
   type: ChartType
   xField: string
@@ -869,7 +882,24 @@ function PerTypeCanvas({ definition, fields, canEdit, onChange, t }: CanvasProps
     return map
   }, [fields])
 
-  switch (definition.type) {
+  const filterableFields = React.useMemo(
+    () => fields.filter((f) => f.filterable !== false),
+    [fields],
+  )
+
+  const filtersSection = (
+    <FiltersSection
+      filters={definition.filters as FilterShape[]}
+      fields={filterableFields}
+      fieldByKey={fieldByKey}
+      canEdit={canEdit}
+      onChange={(nextFilters) => onChange({ ...definition, filters: nextFilters } as Definition)}
+      t={t}
+    />
+  )
+
+  const typeCanvas = (() => {
+    switch (definition.type) {
     case 'flat_list':
       return (
         <FlatListCanvas
@@ -924,7 +954,15 @@ function PerTypeCanvas({ definition, fields, canEdit, onChange, t }: CanvasProps
           t={t}
         />
       )
-  }
+    }
+  })()
+
+  return (
+    <div className="space-y-3">
+      {typeCanvas}
+      {filtersSection}
+    </div>
+  )
 }
 
 // ---------- Common zone primitives ----------
@@ -1649,6 +1687,463 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
         description={t('reports.detail.zones.chartMeasuresHint', 'Each measure alias becomes a series; pick which ones to plot under Y series.')}
       />
     </div>
+  )
+}
+
+// ---------- Filters ----------
+
+const TEXT_LIKE_KINDS = new Set(['id', 'text', 'fk'])
+const NUMERIC_FILTER_KINDS = new Set(['integer', 'float', 'money'])
+const DATE_FILTER_KINDS = new Set(['date', 'datetime'])
+
+const TEXT_OPS: FilterOp[] = ['contains', 'starts_with', 'ends_with', 'eq', 'ne', 'is_null', 'is_not_null']
+const ENUM_OPS: FilterOp[] = ['eq', 'ne', 'in', 'nin', 'is_null', 'is_not_null']
+const BOOL_OPS: FilterOp[] = ['eq', 'is_null', 'is_not_null']
+const NUM_OPS: FilterOp[] = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null']
+const DATE_OPS: FilterOp[] = ['eq', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null']
+const FK_OPS: FilterOp[] = ['eq', 'ne', 'in', 'nin', 'is_null', 'is_not_null']
+
+const DATE_RANGE_TOKENS: DateRangeToken[] = [
+  'today', 'yesterday', 'last_24h', 'last_7_days', 'last_30_days',
+  'mtd', 'last_month', 'qtd', 'last_quarter', 'ytd', 'last_year', 'custom',
+]
+
+function opsForField(field: DatasetFieldRow): FilterOp[] {
+  if (field.kind === 'enum') return ENUM_OPS
+  if (field.kind === 'boolean') return BOOL_OPS
+  if (NUMERIC_FILTER_KINDS.has(field.kind)) return NUM_OPS
+  if (DATE_FILTER_KINDS.has(field.kind)) return DATE_OPS
+  if (field.kind === 'fk') return FK_OPS
+  if (field.kind === 'custom_field') return TEXT_OPS // best-effort default
+  return TEXT_OPS
+}
+
+function defaultOpForField(field: DatasetFieldRow): FilterOp {
+  return opsForField(field)[0]
+}
+
+function defaultLiteralValue(field: DatasetFieldRow): unknown {
+  if (field.kind === 'boolean') return false
+  if (NUMERIC_FILTER_KINDS.has(field.kind)) return 0
+  return ''
+}
+
+type FiltersSectionProps = {
+  filters: FilterShape[]
+  fields: DatasetFieldRow[]
+  fieldByKey: Map<string, DatasetFieldRow>
+  canEdit: boolean
+  onChange: (next: FilterShape[]) => void
+  t: ReturnType<typeof useT>
+}
+
+function FiltersSection({ filters, fields, fieldByKey, canEdit, onChange, t }: FiltersSectionProps) {
+  const usedDateRangeFields = React.useMemo(
+    () => new Set(filters.filter((f) => f.kind === 'date_range').map((f) => f.field)),
+    [filters],
+  )
+
+  const addLiteral = (fieldKey: string) => {
+    const field = fieldByKey.get(fieldKey)
+    if (!field) return
+    const op = defaultOpForField(field)
+    const next: LiteralFilter = { kind: 'literal', field: fieldKey, op, value: defaultLiteralValue(field) }
+    onChange([...filters, next])
+  }
+
+  const addDateRange = (fieldKey: string) => {
+    const next: DateRangeFilter = { kind: 'date_range', field: fieldKey, token: 'last_30_days' }
+    onChange([...filters, next])
+  }
+
+  const updateAt = (idx: number, patch: FilterShape) => {
+    const next = filters.slice()
+    next[idx] = patch
+    onChange(next)
+  }
+
+  const removeAt = (idx: number) => {
+    onChange(filters.filter((_, i) => i !== idx))
+  }
+
+  return (
+    <section className="space-y-3 rounded-md border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.filters', 'Filters')}</h2>
+        <span className="text-xs text-muted-foreground">
+          {filters.length > 0
+            ? t('reports.detail.filters.count', '{count} active').replace('{count}', String(filters.length))
+            : t('reports.detail.filters.none', 'No filters')}
+        </span>
+      </div>
+      {filters.length === 0 ? (
+        <p className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 px-3 py-3 text-center text-sm text-muted-foreground">
+          {t('reports.detail.filters.emptyHint', 'Add a filter to narrow the report rows. AND semantics — every filter must match.')}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {filters.map((filter, idx) => (
+            <FilterRow
+              key={`${filter.kind}-${filter.field}-${idx}`}
+              filter={filter}
+              fields={fields}
+              fieldByKey={fieldByKey}
+              canEdit={canEdit}
+              onChange={(next) => updateAt(idx, next)}
+              onRemove={() => removeAt(idx)}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 pt-1">
+        <FilterAddPicker
+          fields={fields}
+          excluded={new Set()}
+          buttonLabel={t('reports.detail.filters.addLiteral', 'Add filter')}
+          disabled={!canEdit}
+          onPick={addLiteral}
+          t={t}
+        />
+        <FilterAddPicker
+          fields={fields.filter((f) => DATE_FILTER_KINDS.has(f.kind))}
+          excluded={usedDateRangeFields}
+          buttonLabel={t('reports.detail.filters.addDateRange', 'Add date range')}
+          disabled={!canEdit}
+          onPick={addDateRange}
+          t={t}
+        />
+      </div>
+    </section>
+  )
+}
+
+type FilterAddPickerProps = {
+  fields: DatasetFieldRow[]
+  excluded: ReadonlySet<string>
+  buttonLabel: string
+  disabled?: boolean
+  onPick: (fieldKey: string) => void
+  t: ReturnType<typeof useT>
+}
+
+function FilterAddPicker({ fields, excluded, buttonLabel, disabled, onPick, t }: FilterAddPickerProps) {
+  const [open, setOpen] = React.useState(false)
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!open) return
+    function onDocClick(event: MouseEvent) {
+      const node = containerRef.current
+      if (node && event.target instanceof Node && !node.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  const available = fields.filter((f) => !excluded.has(f.key))
+
+  return (
+    <div className="relative inline-block" ref={containerRef}>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={disabled || available.length === 0}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <Plus className="size-3.5" aria-hidden />
+        <span>{buttonLabel}</span>
+      </Button>
+      {open ? (
+        <div className="absolute z-10 mt-1 max-h-64 w-72 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
+          {available.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              {t('reports.detail.picker.empty', 'No more fields available.')}
+            </p>
+          ) : (
+            <ul className="space-y-0.5">
+              {available.map((field) => (
+                <li key={field.key}>
+                  <button
+                    type="button"
+                    className="flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-muted"
+                    onClick={() => { onPick(field.key); setOpen(false) }}
+                  >
+                    <span className="font-medium">{t(field.labelKey, field.key)}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{field.key} · {field.kind}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+type FilterRowProps = {
+  filter: FilterShape
+  fields: DatasetFieldRow[]
+  fieldByKey: Map<string, DatasetFieldRow>
+  canEdit: boolean
+  onChange: (next: FilterShape) => void
+  onRemove: () => void
+  t: ReturnType<typeof useT>
+}
+
+function FilterRow({ filter, fields, fieldByKey, canEdit, onChange, onRemove, t }: FilterRowProps) {
+  const field = fieldByKey.get(filter.field)
+
+  if (filter.kind === 'date_range') {
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5">
+        <span className="text-xs font-medium uppercase text-muted-foreground">
+          {t('reports.detail.filters.dateRangePrefix', 'Date range')}
+        </span>
+        <span className="font-medium">{field ? t(field.labelKey, field.key) : filter.field}</span>
+        <span className="font-mono text-xs text-muted-foreground">{filter.field}</span>
+        <select
+          value={filter.token}
+          onChange={(e) => onChange({ ...filter, token: e.target.value as DateRangeToken })}
+          disabled={!canEdit}
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          {DATE_RANGE_TOKENS.map((token) => (
+            <option key={token} value={token}>
+              {t(`reports.detail.filters.dateRangeToken.${token}`, token)}
+            </option>
+          ))}
+        </select>
+        {filter.token === 'custom' ? (
+          <>
+            <Input
+              type="date"
+              value={filter.from ?? ''}
+              onChange={(e) => onChange({ ...filter, from: e.target.value || undefined })}
+              disabled={!canEdit}
+              className="h-8 w-44 text-xs"
+            />
+            <span className="text-xs text-muted-foreground">→</span>
+            <Input
+              type="date"
+              value={filter.to ?? ''}
+              onChange={(e) => onChange({ ...filter, to: e.target.value || undefined })}
+              disabled={!canEdit}
+              className="h-8 w-44 text-xs"
+            />
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="ml-auto rounded-sm p-1 hover:bg-muted disabled:opacity-50"
+          onClick={() => canEdit && onRemove()}
+          disabled={!canEdit}
+          aria-label={t('reports.detail.filters.remove', 'Remove filter')}
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
+    )
+  }
+
+  if (filter.kind === 'parameter') {
+    // Parameters land in 3.3d. Read-only summary for now.
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5">
+        <span className="text-xs font-medium uppercase text-muted-foreground">{t('reports.detail.filters.parameterPrefix', 'Parameter')}</span>
+        <span className="font-medium">{field ? t(field.labelKey, field.key) : filter.field}</span>
+        <span className="font-mono text-xs">{filter.op}</span>
+        <span className="font-mono text-xs">@{filter.parameter}</span>
+        <button
+          type="button"
+          className="ml-auto rounded-sm p-1 hover:bg-muted disabled:opacity-50"
+          onClick={() => canEdit && onRemove()}
+          disabled={!canEdit}
+          aria-label={t('reports.detail.filters.remove', 'Remove filter')}
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
+    )
+  }
+
+  // literal
+  const ops = field ? opsForField(field) : TEXT_OPS
+  const needsValue = !['is_null', 'is_not_null'].includes(filter.op)
+  const isBetween = filter.op === 'between'
+  const isInList = filter.op === 'in' || filter.op === 'nin'
+
+  const valueComponent = needsValue
+    ? renderLiteralValueInput({
+        field,
+        op: filter.op,
+        value: filter.value,
+        onChange: (next) => onChange({ ...filter, value: next }),
+        canEdit,
+        isBetween,
+        isInList,
+        t,
+      })
+    : null
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5">
+      <span className="font-medium">{field ? t(field.labelKey, field.key) : filter.field}</span>
+      <span className="font-mono text-xs text-muted-foreground">{filter.field}</span>
+      <select
+        value={filter.op}
+        onChange={(e) => onChange({ ...filter, op: e.target.value as FilterOp })}
+        disabled={!canEdit}
+        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+      >
+        {ops.map((op) => (
+          <option key={op} value={op}>{t(`reports.detail.filters.op.${op}`, op)}</option>
+        ))}
+      </select>
+      {valueComponent}
+      <button
+        type="button"
+        className="ml-auto rounded-sm p-1 hover:bg-muted disabled:opacity-50"
+        onClick={() => canEdit && onRemove()}
+        disabled={!canEdit}
+        aria-label={t('reports.detail.filters.remove', 'Remove filter')}
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+    </div>
+  )
+}
+
+type RenderValueInputArgs = {
+  field: DatasetFieldRow | undefined
+  op: FilterOp
+  value: unknown
+  onChange: (next: unknown) => void
+  canEdit: boolean
+  isBetween: boolean
+  isInList: boolean
+  t: ReturnType<typeof useT>
+}
+
+function renderLiteralValueInput({ field, op, value, onChange, canEdit, isBetween, isInList, t }: RenderValueInputArgs): React.ReactNode {
+  void op
+  if (isBetween) {
+    const tuple = (value && typeof value === 'object' && 'from' in (value as object))
+      ? (value as { from?: unknown; to?: unknown })
+      : { from: '', to: '' }
+    return (
+      <span className="flex items-center gap-1">
+        <Input
+          value={tuple.from == null ? '' : String(tuple.from)}
+          onChange={(e) => onChange({ ...tuple, from: e.target.value })}
+          disabled={!canEdit}
+          placeholder={t('reports.detail.filters.from', 'from')}
+          className="h-8 w-28 text-xs"
+        />
+        <span className="text-xs text-muted-foreground">→</span>
+        <Input
+          value={tuple.to == null ? '' : String(tuple.to)}
+          onChange={(e) => onChange({ ...tuple, to: e.target.value })}
+          disabled={!canEdit}
+          placeholder={t('reports.detail.filters.to', 'to')}
+          className="h-8 w-28 text-xs"
+        />
+      </span>
+    )
+  }
+
+  if (isInList) {
+    const text = Array.isArray(value) ? value.join(',') : (value == null ? '' : String(value))
+    return (
+      <Input
+        value={text}
+        onChange={(e) => {
+          const parts = e.target.value.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+          onChange(parts)
+        }}
+        disabled={!canEdit}
+        placeholder={t('reports.detail.filters.inListPlaceholder', 'value1, value2, …')}
+        className="h-8 w-56 text-xs"
+      />
+    )
+  }
+
+  if (!field) {
+    return (
+      <Input
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={!canEdit}
+        className="h-8 w-44 text-xs"
+      />
+    )
+  }
+
+  if (field.kind === 'boolean') {
+    return (
+      <select
+        value={value === true ? 'true' : value === false ? 'false' : ''}
+        onChange={(e) => onChange(e.target.value === 'true')}
+        disabled={!canEdit}
+        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+      >
+        <option value="true">{t('reports.detail.filters.booleanTrue', 'true')}</option>
+        <option value="false">{t('reports.detail.filters.booleanFalse', 'false')}</option>
+      </select>
+    )
+  }
+
+  if (NUMERIC_FILTER_KINDS.has(field.kind)) {
+    return (
+      <Input
+        type="number"
+        value={value == null ? '' : String(value)}
+        onChange={(e) => {
+          const raw = e.target.value
+          if (raw.trim() === '') return onChange('')
+          const num = Number(raw)
+          if (Number.isFinite(num)) onChange(num)
+        }}
+        disabled={!canEdit}
+        className="h-8 w-36 text-xs"
+      />
+    )
+  }
+
+  if (DATE_FILTER_KINDS.has(field.kind)) {
+    return (
+      <Input
+        type={field.kind === 'datetime' ? 'datetime-local' : 'date'}
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={!canEdit}
+        className="h-8 w-44 text-xs"
+      />
+    )
+  }
+
+  if (field.kind === 'enum') {
+    return (
+      <Input
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={!canEdit}
+        placeholder={t('reports.detail.filters.enumPlaceholder', 'enum value')}
+        className="h-8 w-44 text-xs"
+      />
+    )
+  }
+
+  // text-like and fk default to text input.
+  return (
+    <Input
+      value={value == null ? '' : String(value)}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={!canEdit}
+      placeholder={TEXT_LIKE_KINDS.has(field.kind) ? t('reports.detail.filters.textPlaceholder', 'value') : t('reports.detail.filters.fkPlaceholder', 'fk id')}
+      className="h-8 w-44 text-xs"
+    />
   )
 }
 
