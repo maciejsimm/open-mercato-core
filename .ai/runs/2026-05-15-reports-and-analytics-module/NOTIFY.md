@@ -27,3 +27,13 @@
 - customers/reports.ts seeds the first canonical dataset.
 - No UI Steps in this window → no Playwright/screenshots. Phase 2 begins UI work in Steps 2.8–2.10.
 - Decision: deferred PR-level operations (creation, labels, auto-review-pr) until the user can run `gh` manually; commits remain local on the branch.
+
+## 2026-05-15T19:05:00Z — Step 2.1 landed
+- Commit 075e2012c adds Phase 2 entities (Report, ReportFolder, ReportFolderShare) and the initial hand-written migration.
+- Decision: hand-wrote `Migration20260515182452.ts` because `yarn db:generate` needs a live database which is unavailable in this autonomous run. Migration DDL mirrors the perspectives module pattern; safe to apply with `yarn db:migrate`.
+- Caveat: `.snapshot-open-mercato.json` not committed. User must run `yarn db:generate` once after the migration applies to capture the snapshot before continuing Phase 2.
+
+## 2026-05-15T19:10:00Z — run ended (in-progress)
+- 11 code Steps shipped across Phase 1 (1.1..1.10) and Phase 2 (2.1). Stop point chosen because remaining Phase 2 Steps require either a live DB (validators wired to entities, commands, CRUD routes) or a running dev server (UI Steps 2.8–2.9), and neither is available in this autonomous session.
+- Run status: in-progress. Resume via auto-continue-pr-loop once the PR is opened, or pick up Step 2.2 locally.
+- Branch lives only on local disk; the user must `git push -u origin feat/reports-and-analytics-module` once credentials are set up.
