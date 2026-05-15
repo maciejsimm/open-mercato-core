@@ -24,8 +24,8 @@
 | 1 | 1.10 | Seed `customers/reports.ts` (people dataset) — canonical example | done | db8535e15 |
 | 2 | 2.1 | Add ORM entities: `Report`, `ReportFolder`, `ReportFolderShare` | done | 075e2012c |
 | 2 | 2.2 | Add zod validators in `data/validators.ts` (flat_list discriminator only) | done | e8e9e1a31 |
-| 2 | 2.3 | Add commands: folder.create/update/delete/share + report.create/update/delete/move | todo | — |
-| 2 | 2.4 | Add `lib/folder-acl.ts` + unit tests for visibility/edit rules | done | pending |
+| 2 | 2.3 | Add commands: folder.create/update/delete/share + report.create/update/delete/move | done | pending |
+| 2 | 2.4 | Add `lib/folder-acl.ts` + unit tests for visibility/edit rules | done | fc0bf4664 |
 | 2 | 2.5 | Add CRUD routes: folders, folder-shares, reports (`makeCrudRoute`) | todo | — |
 | 2 | 2.6 | Add `api/reports/[id]/run/route.ts` (sync flat_list run) | todo | — |
 | 2 | 2.7 | Wire `setup.ts seedDefaults` for Public root folder + lazy-create My Reports | todo | — |
