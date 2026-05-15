@@ -47,7 +47,7 @@
 | 3 | 3.6b | XLSX export support (adds `exceljs` dependency) | todo | — |
 | 3 | 3.7 | `ReportDashboard` entity + commands + CRUD route (backend foundation) | done | c92c1699a |
 | 3 | 3.7b | Dashboards UI — list, new, composer (`/backend/reports/dashboards/*`) | todo | — |
-| 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | todo | — |
+| 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | done | e4ae57186 |
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands; admin page `/backend/reports/embeds` | todo | — |
 | 3 | 3.10 | Expose `detail:customers.company:after-header` and `detail:customers.person:after-header` injection spots | todo | — |
 | 3 | 3.11 | `record-embed-host` widget against `crud-form:*:fields` + `detail:*:after-header` | todo | — |
