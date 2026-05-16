@@ -46,7 +46,7 @@
 | 3 | 3.6a | `api/reports/[id]/export/route.ts` + `lib/export.ts` (CSV + JSON + XML + Markdown via shared serializer) | done | ac4606075 |
 | 3 | 3.6b | XLSX export support (adds `exceljs` dependency) | todo | — |
 | 3 | 3.7 | `ReportDashboard` entity + commands + CRUD route (backend foundation) | done | c92c1699a |
-| 3 | 3.7b | Dashboards UI — list, new, composer (`/backend/reports/dashboards/*`) | todo | — |
+| 3 | 3.7b | Dashboards UI — list, new, composer (`/backend/reports/dashboards/*`) | done | 0511800cb |
 | 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | done | e4ae57186 |
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands + render endpoint (admin page deferred to 3.9b) | done | 5ac77f4af |
 | 3 | 3.9b | Embeds admin page (`/backend/reports/embeds`) — defer | todo | — |
