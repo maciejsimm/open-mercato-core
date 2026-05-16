@@ -49,7 +49,7 @@
 | 3 | 3.7b | Dashboards UI — list, new, composer (`/backend/reports/dashboards/*`) | done | 0511800cb |
 | 3 | 3.8 | `api/dashboards/[id]/run/route.ts` (parallel tile execution) | done | e4ae57186 |
 | 3 | 3.9 | `ReportEmbed` entity + CRUD + commands + render endpoint (admin page deferred to 3.9b) | done | 5ac77f4af |
-| 3 | 3.9b | Embeds admin page (`/backend/reports/embeds`) — defer | todo | — |
+| 3 | 3.9b | Embeds admin page (`/backend/reports/embeds`) — list + new + toggle + delete | done | cb6c3563b |
 | 3 | 3.10 | Expose `detail:customers.company:after-header` and `detail:customers.person:after-header` injection spots | done | 369ddf0ef |
 | 3 | 3.11 | `record-embed-host` widget registered on `detail:customers.{person,company}:after-header` | done | 5cc28de8f |
 | 3 | 3.3a-fix2 | Bullet-proof the report detail spinner: drop cancelled-guard, add diagnostics + 15s safety timeout | done | 27e189842 |
