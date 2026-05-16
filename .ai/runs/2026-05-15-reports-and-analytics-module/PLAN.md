@@ -66,7 +66,7 @@
 | 5 | 5.3 | `reports-executions-prune` retention worker | done | f22db9366 |
 | 5 | 5.4 | CLI: `yarn mercato reports rebuild-folders`, `reports run`, `reports list-datasets` | done | d49778e7f |
 | 5 | 5.5 | Docs: `apps/docs/docs/framework/modules/reports.mdx` | done | 13b00d451 |
-| 5 | 5.6 | Playwright e2e per `.ai/qa/AGENTS.md` covering build → save → schedule → email → embed | todo | — |
+| 5 | 5.6 | Playwright e2e per `.ai/qa/AGENTS.md` covering build → save → schedule → email → embed | done | c95253c9d |
 
 ## Goal
 
