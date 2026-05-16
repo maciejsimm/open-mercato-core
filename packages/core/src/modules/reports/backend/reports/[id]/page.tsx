@@ -17,6 +17,7 @@ import { cn } from '@open-mercato/shared/lib/utils'
 import { ReportChart } from '../../../widgets/ReportChart'
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   KeyboardSensor,
   useSensor,
@@ -25,6 +26,7 @@ import {
   useDroppable,
   closestCenter,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core'
 
 type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
@@ -534,7 +536,17 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     return map
   }, [datasetFields])
 
+  const [activeDragFieldKey, setActiveDragFieldKey] = React.useState<string | null>(null)
+  const activeDragField = activeDragFieldKey ? fieldByKey.get(activeDragFieldKey) ?? null : null
+
+  const handleDragStart = React.useCallback((event: DragStartEvent) => {
+    const id = String(event.active.id)
+    if (id.startsWith('field:')) setActiveDragFieldKey(id.slice('field:'.length))
+    else setActiveDragFieldKey(null)
+  }, [])
+
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
+    setActiveDragFieldKey(null)
     if (!canEdit) return
     const { active, over } = event
     if (!over) return
@@ -550,6 +562,10 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
       markDirty()
     }
   }, [canEdit, fieldByKey, markDirty])
+
+  const handleDragCancel = React.useCallback(() => {
+    setActiveDragFieldKey(null)
+  }, [])
 
   const handleTypeChange = React.useCallback((next: ReportType) => {
     if (!canEdit) return
@@ -689,7 +705,13 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
             t={t}
           />
 
-          <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
             <div className="grid gap-4 lg:grid-cols-3">
               <div className="flex flex-col gap-4 lg:col-span-1">
                 <MetadataCard
@@ -732,6 +754,17 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                 />
               </div>
             </div>
+            <DragOverlay dropAnimation={null}>
+              {activeDragField ? (
+                <div className="pointer-events-none flex max-w-xs items-center gap-2 rounded-md border border-primary bg-popover px-3 py-2 text-sm shadow-lg">
+                  <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate font-medium">{t(activeDragField.labelKey, activeDragField.key)}</span>
+                    <span className="truncate font-mono text-xs text-muted-foreground">{activeDragField.key}</span>
+                  </div>
+                </div>
+              ) : null}
+            </DragOverlay>
           </DndContext>
 
           <PreviewSection
