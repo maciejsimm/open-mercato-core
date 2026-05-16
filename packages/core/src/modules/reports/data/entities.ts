@@ -294,3 +294,55 @@ export class Report {
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
 }
+
+@Entity({ tableName: 'reports_executions' })
+@Index({ name: 'reports_executions_report_idx', properties: ['reportId'] })
+@Index({ name: 'reports_executions_schedule_idx', properties: ['scheduleId'] })
+@Index({ name: 'reports_executions_tenant_status_idx', properties: ['tenantId', 'status'] })
+@Index({ name: 'reports_executions_started_at_idx', properties: ['startedAt'] })
+export class ReportExecution {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'report_id', type: 'uuid' })
+  reportId!: string
+
+  @Property({ name: 'schedule_id', type: 'uuid', nullable: true })
+  scheduleId?: string | null
+
+  @Property({ name: 'requested_by_user_id', type: 'uuid', nullable: true })
+  requestedByUserId?: string | null
+
+  @Property({ name: 'params_hash', type: 'text' })
+  paramsHash!: string
+
+  @Property({ type: 'text' })
+  status!: 'running' | 'completed' | 'failed' | 'cancelled'
+
+  @Property({ name: 'started_at', type: Date })
+  startedAt!: Date
+
+  @Property({ name: 'completed_at', type: Date, nullable: true })
+  completedAt?: Date | null
+
+  @Property({ name: 'row_count', type: 'int', nullable: true })
+  rowCount?: number | null
+
+  @Property({ name: 'duration_ms', type: 'int', nullable: true })
+  durationMs?: number | null
+
+  @Property({ name: 'error_text', type: 'text', nullable: true })
+  errorText?: string | null
+
+  @Property({ name: 'result_blob_id', type: 'uuid', nullable: true })
+  resultBlobId?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+}

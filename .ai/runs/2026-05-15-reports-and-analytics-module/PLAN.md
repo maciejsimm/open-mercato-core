@@ -63,7 +63,7 @@
 | 4 | 4.6 | Schedule editor UI: `/backend/reports/schedules` + per-report Schedule modal | done | 4863923fa |
 | 5 | 5.1 | Result cache (Redis tier via DI `cache`) + tag-based invalidation | done | 833602d42 |
 | 5 | 5.2 | Query profile integration in execute engine | todo | — |
-| 5 | 5.3 | `reports-executions-prune` retention worker | todo | — |
+| 5 | 5.3 | `reports-executions-prune` retention worker | done | f22db9366 |
 | 5 | 5.4 | CLI: `yarn mercato reports rebuild-folders`, `reports run`, `reports list-datasets` | todo | — |
 | 5 | 5.5 | Docs: `apps/docs/docs/framework/modules/reports.mdx` | todo | — |
 | 5 | 5.6 | Playwright e2e per `.ai/qa/AGENTS.md` covering build → save → schedule → email → embed | todo | — |
