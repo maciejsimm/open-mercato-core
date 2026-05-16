@@ -141,3 +141,11 @@
 - Unit tests: 219/219 across 13 suites — no regressions
 - Deferred (carried forward): 4.3 (email template), 4.5 (attachments persistence), 3.6b (xlsx)
 - Next session default: 5.1 result cache
+
+## 2026-05-16T09:10:00Z — resume continued (step 5.1)
+- Step 5.1 landed (commit 510a1feef): result cache + tag invalidation
+- Cache wired into /api/reports/[id]/run + dashboards tile runner
+- Report update/delete/move commands invalidate cache on write
+- 16 new unit tests; reports pad now 235/235 across 14 suites
+- Cache NOT wired into workers (queue-controlled) or lib/export (one-shot) — note in HANDOFF
+- Next session default: 5.3 retention worker
