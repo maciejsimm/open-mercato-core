@@ -8,8 +8,8 @@ import type { ParameterDef, ReportDefinition } from '@open-mercato/shared/module
 import { Report, ReportDashboard, ReportFolder, ReportFolderShare } from '../../../../data/entities'
 import { dashboardLayoutSchema, dashboardRunSchema, type DashboardLayoutInput, type DashboardTileInput } from '../../../../data/validators'
 import { loadDataset } from '../../../../lib/datasets-registry'
-import { executeReport } from '../../../../lib/execute'
 import { FieldAclDeniedError } from '../../../../lib/field-redact'
+import { executeReportCached, type ReportsCacheService } from '../../../../lib/result-cache'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../../../lib/folder-acl'
 import { reportsTag, reportsErrorSchema } from '../../../openapi'
 
@@ -128,6 +128,12 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   const dashboardParams = parsedBody.data.params ?? {}
 
   const queryEngine = container.resolve('queryEngine') as QueryEngine
+  let cacheService: ReportsCacheService | null = null
+  try {
+    cacheService = container.resolve('cacheService') as ReportsCacheService
+  } catch {
+    cacheService = null
+  }
   const now = new Date()
   const tenantId = auth.tenantId
   const organizationId = auth.orgId ?? ''
@@ -139,6 +145,7 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
       organizationId,
       userFeatures,
       queryEngine,
+      cacheService,
       now,
       dashboardParams,
     }),
@@ -161,6 +168,7 @@ type RunTileContext = {
   organizationId: string
   userFeatures: ReadonlySet<string>
   queryEngine: QueryEngine
+  cacheService: ReportsCacheService | null
   now: Date
   dashboardParams: Record<string, unknown>
 }
@@ -185,16 +193,24 @@ async function runTile(tile: DashboardTileInput, ctx: RunTileContext): Promise<T
 
     const params = mergeTileParams(ctx.dashboardParams, tile.paramBindings)
 
-    const out = await executeReport(ctx.queryEngine, {
-      dataset,
-      definition,
-      userFeatures: ctx.userFeatures,
-      tenantId: ctx.tenantId,
-      organizationId: ctx.organizationId,
-      params,
-      parameterDefs,
-      now: ctx.now,
-    })
+    const out = await executeReportCached(
+      ctx.queryEngine,
+      {
+        dataset,
+        definition,
+        userFeatures: ctx.userFeatures,
+        tenantId: ctx.tenantId,
+        organizationId: ctx.organizationId,
+        params,
+        parameterDefs,
+        now: ctx.now,
+      },
+      {
+        cache: ctx.cacheService,
+        reportId: report.id,
+        dataset,
+      },
+    )
     return {
       tileId: tile.id,
       reportId: tile.reportId,

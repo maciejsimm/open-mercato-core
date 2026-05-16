@@ -61,7 +61,7 @@
 | 4 | 4.4 | `notifications.ts` + `notifications.client.ts` (execution_ready, schedule_delivered, export_ready) | done | f19601a6a |
 | 4 | 4.5 | Async execute path: write result to `attachments`, emit notification | todo | — |
 | 4 | 4.6 | Schedule editor UI: `/backend/reports/schedules` + per-report Schedule modal | done | 4863923fa |
-| 5 | 5.1 | Result cache (Redis tier via DI `cache`) + tag-based invalidation | todo | — |
+| 5 | 5.1 | Result cache (Redis tier via DI `cache`) + tag-based invalidation | done | 833602d42 |
 | 5 | 5.2 | Query profile integration in execute engine | todo | — |
 | 5 | 5.3 | `reports-executions-prune` retention worker | todo | — |
 | 5 | 5.4 | CLI: `yarn mercato reports rebuild-folders`, `reports run`, `reports list-datasets` | todo | — |

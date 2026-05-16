@@ -16,7 +16,31 @@ import {
   type ReportUpdateInput,
 } from '../data/validators'
 import { canEditFolder, resolveArtifactPermission } from '../lib/folder-acl'
+import {
+  buildReportInvalidationTags,
+  invalidateReportCache,
+  type ReportsCacheService,
+} from '../lib/result-cache'
 import { loadAclContext, requireTenant } from './shared'
+
+async function invalidateCacheForReport(
+  container: { resolve: <T>(name: string) => T },
+  report: Report,
+): Promise<void> {
+  let cache: ReportsCacheService | null = null
+  try {
+    cache = container.resolve<ReportsCacheService>('cacheService')
+  } catch {
+    cache = null
+  }
+  if (!cache) return
+  const tags = buildReportInvalidationTags({
+    tenantId: report.tenantId,
+    reportId: report.id,
+    datasetId: report.datasetId,
+  })
+  await invalidateReportCache(cache, tags)
+}
 
 const reportIndexer: CrudIndexerConfig<Report> = {
   entityType: 'reports:report',
@@ -131,6 +155,7 @@ const updateReportCommand: CommandHandler<ReportUpdateInput, { reportId: string 
       indexer: reportIndexer,
       events: reportEvents,
     })
+    await invalidateCacheForReport(ctx.container, report)
     return { reportId: report.id }
   },
   buildLog: ({ result }) => ({
@@ -174,6 +199,7 @@ const deleteReportCommand: CommandHandler<ReportDeleteInput, { reportId: string 
       indexer: reportIndexer,
       events: reportEvents,
     })
+    await invalidateCacheForReport(ctx.container, report)
     return { reportId: report.id }
   },
   buildLog: ({ result }) => ({
@@ -225,6 +251,7 @@ const moveReportCommand: CommandHandler<ReportMoveInput, { reportId: string }> =
       indexer: reportIndexer,
       events: reportEvents,
     })
+    await invalidateCacheForReport(ctx.container, report)
     return { reportId: report.id }
   },
   buildLog: ({ result }) => ({

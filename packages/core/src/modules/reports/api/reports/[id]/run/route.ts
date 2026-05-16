@@ -8,8 +8,9 @@ import type { ReportDefinition, ParameterDef } from '@open-mercato/shared/module
 import { Report, ReportFolder, ReportFolderShare } from '../../../../data/entities'
 import { reportRunSchema } from '../../../../data/validators'
 import { loadDataset } from '../../../../lib/datasets-registry'
-import { executeReport, shouldDispatchAsync } from '../../../../lib/execute'
+import { shouldDispatchAsync } from '../../../../lib/execute'
 import { FieldAclDeniedError } from '../../../../lib/field-redact'
+import { executeReportCached, type ReportsCacheService } from '../../../../lib/result-cache'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../../../lib/folder-acl'
 import { reportsTag, reportsErrorSchema } from '../../../openapi'
 
@@ -144,16 +145,30 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   }
 
   const queryEngine = container.resolve('queryEngine') as QueryEngine
+  let cacheService: ReportsCacheService | null = null
   try {
-    const out = await executeReport(queryEngine, {
-      dataset,
-      definition,
-      userFeatures,
-      tenantId: auth.tenantId,
-      organizationId: auth.orgId ?? '',
-      params,
-      parameterDefs,
-    })
+    cacheService = container.resolve('cacheService') as ReportsCacheService
+  } catch {
+    cacheService = null
+  }
+  try {
+    const out = await executeReportCached(
+      queryEngine,
+      {
+        dataset,
+        definition,
+        userFeatures,
+        tenantId: auth.tenantId,
+        organizationId: auth.orgId ?? '',
+        params,
+        parameterDefs,
+      },
+      {
+        cache: cacheService,
+        reportId: report.id,
+        dataset,
+      },
+    )
     report.lastExecutedAt = new Date()
     await em.flush()
     return NextResponse.json({
