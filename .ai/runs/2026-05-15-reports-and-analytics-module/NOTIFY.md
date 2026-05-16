@@ -122,3 +122,12 @@
 - UI verification: skipped at checkpoint level — no Playwright scenario yet (5.6 covers it). The embed widget and dashboards run route are exercised end-to-end by their unit tests + the existing aggregator/executor coverage.
 - Decision: stop here. Three deferred Phase 3 items (3.6b XLSX, 3.7b dashboards UI, 3.9b embeds admin page) plus the filters↔parameters bridge remain. Phase 4 is the next major scope (schedules + async + notifications + workers).
 - Total session pace: 16 code Steps shipped (Phase 2 fixups + entire Phase 3 happy path). Cumulative across all resumes: ~26 Steps.
+
+## 2026-05-16T08:00:00Z — checkpoint 8 — Phase 3 UI complete (3.3a-fix2..3.9b)
+- Steps covered: 3.3a-fix2 (27e189842), 3.3a-fix3 (0be646d5c), 3.7b (0511800cb), 3.9b (cb6c3563b). 4 code Steps since checkpoint 7.
+- Bonus: i18n catch-up for the `reports.embed.*` keys that Step 3.11 referenced but never added to en.json (5 keys); now clean.
+- Touched packages: @open-mercato/core (reports module only).
+- Validation: yarn generate clean, tsc clean, jest 209/209 across 12 suites, i18n sync clean (5 missing → 0 after fix), advisory unused-keys count unchanged.
+- UI verification: user-verified the spinner fix manually after 3.3a-fix3. Dashboards UI and embeds admin page are untested at the UI level — recommend adding a Playwright smoke scenario in Step 5.6.
+- Decision: stop at the 20-step safety threshold. Phase 4 (schedules + async + notifications + workers) is the natural next scope; deferred Phase 3 polish (3.6b XLSX, filters↔parameters bridge, 3.7b2 grid composer) can be picked up alongside or before.
+- Total session pace: 21 code Steps (Phase 2 fixups, all primary Phase 3 + the two spinner fixups + 3.7b + 3.9b). Cumulative across all resumes: ~31 Steps.
