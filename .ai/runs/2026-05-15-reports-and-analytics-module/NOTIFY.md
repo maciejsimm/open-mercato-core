@@ -156,3 +156,11 @@
 - New surface: schedule editor UI, notifications config, result cache, executions entity + prune worker, CLI commands
 - Deferred: 4.3 (email), 4.5 (attachments persistence), 3.6b (xlsx), 5.2 (profile), 5.5 (docs), 5.6 (e2e)
 - Next-session default: 5.2 query profile integration
+
+## 2026-05-16T09:35:00Z — checkpoint 10 + spec closure
+- Three more code steps landed since checkpoint 9: 5.2 (profiler), 5.5 (docs), 5.6 (Playwright smoke)
+- Test pad: 251/251 across 16 suites (unchanged — 5.2 is observability, 5.5 is docs, 5.6 is Playwright)
+- Playwright discovery: TC-REPORTS-001 lists 4 tests
+- Spec is now closed modulo three explicitly external blockers: 4.3 (email), 4.5 (attachments), 3.6b (exceljs)
+- Resume window total: 8 code steps + 2 checkpoint commits since the post-compaction resume
+- Next action: user opens the PR
