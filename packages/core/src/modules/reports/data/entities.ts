@@ -176,6 +176,66 @@ export class ReportEmbed {
   deletedAt?: Date | null
 }
 
+@Entity({ tableName: 'reports_schedules' })
+@Index({ name: 'reports_schedules_report_idx', properties: ['reportId'] })
+@Index({
+  name: 'reports_schedules_next_run_idx',
+  expression:
+    'create index "reports_schedules_next_run_idx" on "reports_schedules" ("next_run_at","enabled") where "deleted_at" is null',
+})
+export class ReportSchedule {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'report_id', type: 'uuid' })
+  reportId!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  @Property({ type: 'text' })
+  cadence!: string
+
+  @Property({ type: 'text' })
+  timezone!: string
+
+  @Property({ name: 'recipients_json', type: 'json' })
+  recipientsJson: unknown = []
+
+  @Property({ name: 'params_json', type: 'json' })
+  paramsJson: unknown = {}
+
+  @Property({ name: 'formats_json', type: 'json' })
+  formatsJson: unknown = ['csv']
+
+  @Property({ type: 'boolean', default: true })
+  enabled: boolean = true
+
+  @Property({ name: 'last_run_at', type: Date, nullable: true })
+  lastRunAt?: Date | null
+
+  @Property({ name: 'next_run_at', type: Date, nullable: true })
+  nextRunAt?: Date | null
+
+  @Property({ name: 'failure_count', type: 'int', default: 0 })
+  failureCount: number = 0
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  updatedAt?: Date | null
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
 @Entity({ tableName: 'reports_reports' })
 @Index({ name: 'reports_reports_folder_idx', properties: ['folderId'] })
 @Index({ name: 'reports_reports_owner_idx', properties: ['ownerUserId'] })

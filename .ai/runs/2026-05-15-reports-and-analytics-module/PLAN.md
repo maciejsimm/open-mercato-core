@@ -55,7 +55,7 @@
 | 3 | 3.3a-fix2 | Bullet-proof the report detail spinner: drop cancelled-guard, add diagnostics + 15s safety timeout | done | 27e189842 |
 | 3 | 3.3a-fix3 | Read `params.id` from page props (not `useParams()`) — root cause of the spinner | done | 0be646d5c |
 | 3 | 3.3b-fix | Add `<DragOverlay>` so dragged field follows the mouse cursor | done | 8ce925173 |
-| 4 | 4.1 | `ReportSchedule` entity + CRUD + commands | todo | — |
+| 4 | 4.1 | `ReportSchedule` entity + CRUD + commands | done | 000894c23 |
 | 4 | 4.2 | Workers: `reports-schedule-runner`, `reports-schedule-execute`, `reports-async-execute`, `reports-export-build` | todo | — |
 | 4 | 4.3 | `lib/email-attachments.ts` + `ScheduledReportEmail` React template | todo | — |
 | 4 | 4.4 | `notifications.ts` + `notifications.client.ts` (execution_ready, schedule_delivered, export_ready) | todo | — |

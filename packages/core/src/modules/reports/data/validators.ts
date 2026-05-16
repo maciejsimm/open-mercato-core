@@ -465,3 +465,61 @@ export const embedDeleteSchema = z.object({
   id: uuid(),
 })
 export type EmbedDeleteInput = z.infer<typeof embedDeleteSchema>
+
+// ---------- Schedules ----------
+
+/**
+ * Cadence formats recognized by `parseCadence` and the workers:
+ *  - `weekly:<dow>@<HH:MM>`   e.g. `weekly:mon@09:00`
+ *  - `monthly:<day>@<HH:MM>`  e.g. `monthly:1@09:00` (day 1..28)
+ *  - `cron:<expression>`      free-form cron expression evaluated by the worker
+ */
+const cadenceWeeklyPattern = /^weekly:(mon|tue|wed|thu|fri|sat|sun)@([01]\d|2[0-3]):[0-5]\d$/
+const cadenceMonthlyPattern = /^monthly:(?:[1-9]|1\d|2[0-8])@([01]\d|2[0-3]):[0-5]\d$/
+const cadenceCronPattern = /^cron:.+$/
+
+const cadenceSchema = z.string().min(1).max(200).refine(
+  (value) =>
+    cadenceWeeklyPattern.test(value) ||
+    cadenceMonthlyPattern.test(value) ||
+    cadenceCronPattern.test(value),
+  { message: 'Cadence must be `weekly:<dow>@<HH:MM>`, `monthly:<day>@<HH:MM>`, or `cron:<expr>`' },
+)
+
+const recipientSchema = z.union([
+  z.object({ type: z.literal('user'), userId: uuid() }),
+  z.object({ type: z.literal('role'), roleId: uuid() }),
+  z.object({ type: z.literal('email'), email: z.string().email() }),
+])
+export type ScheduleRecipient = z.infer<typeof recipientSchema>
+
+const scheduleFormatsSchema = z.array(z.enum(['csv', 'xlsx'])).min(1).max(2)
+
+export const scheduleCreateSchema = z.object({
+  reportId: uuid(),
+  name: nameSchema,
+  cadence: cadenceSchema,
+  timezone: z.string().min(1).max(80),
+  recipients: z.array(recipientSchema).min(1).max(50),
+  params: z.record(z.string(), z.unknown()).optional(),
+  formats: scheduleFormatsSchema.optional(),
+  enabled: z.boolean().optional(),
+})
+export type ScheduleCreateInput = z.infer<typeof scheduleCreateSchema>
+
+export const scheduleUpdateSchema = z.object({
+  id: uuid(),
+  name: nameSchema.optional(),
+  cadence: cadenceSchema.optional(),
+  timezone: z.string().min(1).max(80).optional(),
+  recipients: z.array(recipientSchema).min(1).max(50).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+  formats: scheduleFormatsSchema.optional(),
+  enabled: z.boolean().optional(),
+})
+export type ScheduleUpdateInput = z.infer<typeof scheduleUpdateSchema>
+
+export const scheduleDeleteSchema = z.object({
+  id: uuid(),
+})
+export type ScheduleDeleteInput = z.infer<typeof scheduleDeleteSchema>
