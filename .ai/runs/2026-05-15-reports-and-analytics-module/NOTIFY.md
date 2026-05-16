@@ -149,3 +149,10 @@
 - 16 new unit tests; reports pad now 235/235 across 14 suites
 - Cache NOT wired into workers (queue-controlled) or lib/export (one-shot) — note in HANDOFF
 - Next session default: 5.3 retention worker
+
+## 2026-05-16T09:25:00Z — checkpoint 9 (steps 4.6, 4.4, 5.1, 5.3, 5.4)
+- Five code steps landed this resume; SHA range 00b6be67a..37822d6ab
+- Test pad: 251/251 across 16 suites (+32 new tests this resume)
+- New surface: schedule editor UI, notifications config, result cache, executions entity + prune worker, CLI commands
+- Deferred: 4.3 (email), 4.5 (attachments persistence), 3.6b (xlsx), 5.2 (profile), 5.5 (docs), 5.6 (e2e)
+- Next-session default: 5.2 query profile integration
