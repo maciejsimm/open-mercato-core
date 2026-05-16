@@ -131,3 +131,13 @@
 - UI verification: user-verified the spinner fix manually after 3.3a-fix3. Dashboards UI and embeds admin page are untested at the UI level — recommend adding a Playwright smoke scenario in Step 5.6.
 - Decision: stop at the 20-step safety threshold. Phase 4 (schedules + async + notifications + workers) is the natural next scope; deferred Phase 3 polish (3.6b XLSX, filters↔parameters bridge, 3.7b2 grid composer) can be picked up alongside or before.
 - Total session pace: 21 code Steps (Phase 2 fixups, all primary Phase 3 + the two spinner fixups + 3.7b + 3.9b). Cumulative across all resumes: ~31 Steps.
+
+## 2026-05-16T09:05:00Z — resume continued (steps 4.6 + 4.4)
+- Resumed by: @maciejsimm
+- Resume point: 4.6 → 4.4 (source: HANDOFF + Tasks table)
+- PR head SHA: 8fb755420
+- Step 4.6 landed (commit 00b6be67a): schedules list + new pages + 47 EN keys
+- Step 4.4 landed (commit 8fb755420): notifications.ts + client renderers + ReportNotificationCard shell + 11 EN keys
+- Unit tests: 219/219 across 13 suites — no regressions
+- Deferred (carried forward): 4.3 (email template), 4.5 (attachments persistence), 3.6b (xlsx)
+- Next session default: 5.1 result cache
