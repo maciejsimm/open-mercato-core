@@ -6,6 +6,7 @@ import type {
   Sort as DslSort,
 } from '@open-mercato/shared/modules/reports/dsl'
 import { SortDir, type Filter, type QueryEngine, type QueryOptions, type Sort } from '@open-mercato/shared/lib/query/types'
+import { createProfiler, shouldEnableProfiler, type Profiler } from '@open-mercato/shared/lib/profiler'
 import { bindFiltersToParameters, resolveParameters } from './parameters'
 import { validateDefinitionAgainstAcl } from './field-redact'
 import { translateFlatList } from './query-translator'
@@ -19,6 +20,18 @@ import {
   type MeasureExpr,
   type Row,
 } from './aggregator'
+
+function createReportsProfiler(definition: ReportDefinition, dataset: Dataset): Profiler {
+  const target = `${definition.type}:${dataset.id}`
+  const enabled = shouldEnableProfiler(target) || shouldEnableProfiler(`reports.${definition.type}`)
+  return createProfiler({
+    scope: 'reports',
+    target,
+    label: `reports:${target}`,
+    loggerLabel: '[reports:profile]',
+    enabled,
+  })
+}
 
 export type ExecutionInput = {
   dataset: Dataset
@@ -82,39 +95,53 @@ export async function executeFlatList(
   if (input.definition.type !== 'flat_list') {
     throw new Error(`executeFlatList only supports flat_list (got '${input.definition.type}')`)
   }
+  const profiler = createReportsProfiler(input.definition, input.dataset)
+  try {
+    // Step 1: field-ACL — re-resolved against the running user.
+    await profiler.measure('field-acl', () => {
+      validateDefinitionAgainstAcl(input.definition, input.dataset, input.userFeatures)
+    })
 
-  // Step 1: field-ACL — re-resolved against the running user.
-  validateDefinitionAgainstAcl(input.definition, input.dataset, input.userFeatures)
+    // Step 2: parameter resolution + filter binding.
+    const now = input.now ?? new Date()
+    const boundFilters = await profiler.measure('parameters', () => {
+      const resolved = resolveParameters(input.params, input.parameterDefs, now)
+      return bindFiltersToParameters(input.definition.filters, resolved, now)
+    })
 
-  // Step 2: parameter resolution + filter binding.
-  const now = input.now ?? new Date()
-  const resolved = resolveParameters(input.params, input.parameterDefs, now)
-  const boundFilters = bindFiltersToParameters(input.definition.filters, resolved, now)
+    // Step 3: query translation.
+    const cap = Math.max(1, input.inMemoryCap ?? readEnvCap())
+    const opts = await profiler.measure('translate', () =>
+      translateFlatList(input.definition, input.dataset, {
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        filters: boundFilters,
+        pageSize: Math.min(cap, 100),
+        page: 1,
+      }),
+    )
 
-  // Step 3: query translation.
-  const cap = Math.max(1, input.inMemoryCap ?? readEnvCap())
-  const opts = translateFlatList(input.definition, input.dataset, {
-    tenantId: input.tenantId,
-    organizationId: input.organizationId,
-    filters: boundFilters,
-    pageSize: Math.min(cap, 100),
-    page: 1,
-  })
+    // Step 4: run + measure.
+    const started = Date.now()
+    const result = await profiler.measure('query.execute', () =>
+      queryEngine.query(input.dataset.entityType, opts),
+    )
+    const duration_ms = Date.now() - started
 
-  // Step 4: run + measure.
-  const started = Date.now()
-  const result = await queryEngine.query(input.dataset.entityType, opts)
-  const duration_ms = Date.now() - started
+    const rows = result.items as Record<string, unknown>[]
+    const total = typeof result.total === 'number' ? result.total : rows.length
+    const truncated = rows.length >= cap
 
-  const rows = result.items as Record<string, unknown>[]
-  const total = typeof result.total === 'number' ? result.total : rows.length
-  const truncated = rows.length >= cap
-
-  return {
-    mode: 'sync',
-    rows,
-    total,
-    meta: { duration_ms, truncated, cap },
+    profiler.end({ rows: rows.length, total, truncated, cap })
+    return {
+      mode: 'sync',
+      rows,
+      total,
+      meta: { duration_ms, truncated, cap },
+    }
+  } catch (err) {
+    profiler.end({ error: err instanceof Error ? err.message : String(err) })
+    throw err
   }
 }
 
@@ -274,90 +301,117 @@ export async function executeReport(
     return { ...out, meta: { ...out.meta, fields: input.definition.fields } }
   }
 
-  // Steps 1 + 2 shared with flat_list: field-ACL + parameter resolution.
-  validateDefinitionAgainstAcl(input.definition, input.dataset, input.userFeatures)
-  const now = input.now ?? new Date()
-  const resolved = resolveParameters(input.params, input.parameterDefs, now)
-  const boundFilters = bindFiltersToParameters(input.definition.filters, resolved, now)
-
-  const cap = Math.max(1, input.inMemoryCap ?? readEnvCap())
-  const queryOpts = buildAggregationQueryOptions(input.definition, input.dataset, {
-    tenantId: input.tenantId,
-    organizationId: input.organizationId,
-    filters: boundFilters,
-    cap,
-  })
-
-  const started = Date.now()
-  const result = await queryEngine.query(input.dataset.entityType, queryOpts)
-  const rawRows = result.items as Row[]
-  const truncated = rawRows.length >= cap
-
-  let rows: Row[] = []
-  let outFields: string[] = []
-  let limit: number | undefined
-
-  if (input.definition.type === 'grouped') {
-    rows = aggregateGroupBy({
-      rows: rawRows,
-      groupBy: input.definition.groupBy,
-      measures: input.definition.measures,
+  const profiler = createReportsProfiler(input.definition, input.dataset)
+  const aggregatedDefinition = input.definition
+  try {
+    // Steps 1 + 2 shared with flat_list: field-ACL + parameter resolution.
+    await profiler.measure('field-acl', () => {
+      validateDefinitionAgainstAcl(aggregatedDefinition, input.dataset, input.userFeatures)
     })
-    rows = sortRows(rows, input.definition.sort)
-    limit = input.definition.limit
-    outFields = [
-      ...input.definition.groupBy,
-      ...input.definition.measures.map((m) => measureAlias(m)),
-    ]
-  } else if (input.definition.type === 'summary') {
-    const summaryRow = aggregateSummary({
-      rows: rawRows,
-      measures: input.definition.measures,
+    const now = input.now ?? new Date()
+    const boundFilters = await profiler.measure('parameters', () => {
+      const resolved = resolveParameters(input.params, input.parameterDefs, now)
+      return bindFiltersToParameters(aggregatedDefinition.filters, resolved, now)
     })
-    rows = [summaryRow]
-    outFields = input.definition.measures.map((m) => measureAlias(m))
-  } else if (input.definition.type === 'pivot') {
-    if (!input.definition.value) {
-      // Validators should reject this, but be defensive at runtime.
-      rows = []
-      outFields = [...input.definition.rows]
-    } else {
-      const valueMeasure: MeasureExpr = input.definition.value
-      const pivot = aggregatePivot({
-        rows: rawRows,
-        rowKeys: input.definition.rows,
-        colKeys: input.definition.cols,
-        value: valueMeasure,
+
+    const cap = Math.max(1, input.inMemoryCap ?? readEnvCap())
+    const queryOpts = await profiler.measure('translate', () =>
+      buildAggregationQueryOptions(aggregatedDefinition, input.dataset, {
+        tenantId: input.tenantId,
+        organizationId: input.organizationId,
+        filters: boundFilters,
+        cap,
+      }),
+    )
+
+    const started = Date.now()
+    const result = await profiler.measure('query.execute', () =>
+      queryEngine.query(input.dataset.entityType, queryOpts),
+    )
+    const rawRows = result.items as Row[]
+    const truncated = rawRows.length >= cap
+
+    let rows: Row[] = []
+    let outFields: string[] = []
+    let limit: number | undefined
+
+    if (input.definition.type === 'grouped') {
+      const def = input.definition
+      await profiler.measure('aggregate.grouped', () => {
+        rows = aggregateGroupBy({
+          rows: rawRows,
+          groupBy: def.groupBy,
+          measures: def.measures,
+        })
+        rows = sortRows(rows, def.sort)
+        limit = def.limit
+        outFields = [
+          ...def.groupBy,
+          ...def.measures.map((m) => measureAlias(m)),
+        ]
       })
-      rows = pivotToWideRows(pivot)
-      const colHeaderLabels = pivot.colHeaders.map((h) =>
-        Object.values(h).map((v) => (v === null || v === undefined ? '∅' : String(v))).join('|'),
-      )
-      outFields = [...input.definition.rows, ...colHeaderLabels]
+    } else if (input.definition.type === 'summary') {
+      const def = input.definition
+      await profiler.measure('aggregate.summary', () => {
+        const summaryRow = aggregateSummary({
+          rows: rawRows,
+          measures: def.measures,
+        })
+        rows = [summaryRow]
+        outFields = def.measures.map((m) => measureAlias(m))
+      })
+    } else if (input.definition.type === 'pivot') {
+      const def = input.definition
+      await profiler.measure('aggregate.pivot', () => {
+        if (!def.value) {
+          // Validators should reject this, but be defensive at runtime.
+          rows = []
+          outFields = [...def.rows]
+          return
+        }
+        const valueMeasure: MeasureExpr = def.value
+        const pivot = aggregatePivot({
+          rows: rawRows,
+          rowKeys: def.rows,
+          colKeys: def.cols,
+          value: valueMeasure,
+        })
+        rows = pivotToWideRows(pivot)
+        const colHeaderLabels = pivot.colHeaders.map((h) =>
+          Object.values(h).map((v) => (v === null || v === undefined ? '∅' : String(v))).join('|'),
+        )
+        outFields = [...def.rows, ...colHeaderLabels]
+      })
+    } else {
+      const def = input.definition
+      await profiler.measure('aggregate.chart', () => {
+        rows = aggregateGroupBy({
+          rows: rawRows,
+          groupBy: def.groupBy ?? [],
+          measures: def.measures ?? [],
+        })
+        limit = def.limit
+        outFields = [
+          ...(def.groupBy ?? []),
+          ...(def.measures ?? []).map((m) => measureAlias(m)),
+        ]
+      })
     }
-  } else {
-    // chart
-    rows = aggregateGroupBy({
-      rows: rawRows,
-      groupBy: input.definition.groupBy ?? [],
-      measures: input.definition.measures ?? [],
-    })
-    limit = input.definition.limit
-    outFields = [
-      ...(input.definition.groupBy ?? []),
-      ...(input.definition.measures ?? []).map((m) => measureAlias(m)),
-    ]
-  }
 
-  if (typeof limit === 'number' && limit > 0 && rows.length > limit) {
-    rows = rows.slice(0, limit)
-  }
+    if (typeof limit === 'number' && limit > 0 && rows.length > limit) {
+      rows = rows.slice(0, limit)
+    }
 
-  const duration_ms = Date.now() - started
-  return {
-    mode: 'sync',
-    rows,
-    total: rows.length,
-    meta: { duration_ms, truncated, cap, fields: outFields },
+    const duration_ms = Date.now() - started
+    profiler.end({ rows: rows.length, rawRows: rawRows.length, truncated, cap })
+    return {
+      mode: 'sync',
+      rows,
+      total: rows.length,
+      meta: { duration_ms, truncated, cap, fields: outFields },
+    }
+  } catch (err) {
+    profiler.end({ error: err instanceof Error ? err.message : String(err) })
+    throw err
   }
 }
