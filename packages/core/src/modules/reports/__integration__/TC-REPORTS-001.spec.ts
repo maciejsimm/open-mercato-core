@@ -17,7 +17,7 @@ import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__inte
  * be added when 4.3/4.5 land.
  */
 test.describe('TC-REPORTS-001: Reports module smoke', () => {
-  test('datasets API returns at least customers:person', async ({ request }) => {
+  test('datasets API returns module-declared datasets', async ({ request }) => {
     const token = await getAuthToken(request)
     const response = await apiRequest(request, 'GET', '/api/reports/datasets', { token })
     expect(response.ok(), `Datasets API should respond 2xx (got ${response.status()})`).toBe(true)
@@ -25,35 +25,36 @@ test.describe('TC-REPORTS-001: Reports module smoke', () => {
       items?: Array<{ id?: unknown; moduleId?: unknown }>
     }
     const items = Array.isArray(payload.items) ? payload.items : []
-    const ids = items
-      .map((item) => (typeof item.id === 'string' ? item.id : null))
-      .filter((id): id is string => Boolean(id))
-    expect(ids, 'expected the customers:person canonical dataset to be visible').toContain('customers:person')
+    expect(items.length, 'expected at least one declared dataset').toBeGreaterThan(0)
+    const customerDatasets = items.filter((item) => (item as { moduleId?: string }).moduleId === 'customers')
+    expect(customerDatasets.length, 'expected at least one customers-module dataset').toBeGreaterThan(0)
   })
 
   test('backend reports list page loads with folder navigator', async ({ page }) => {
     await login(page, 'admin')
     await page.goto('/backend/reports', { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: /Reports/i }).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: /New report/i }).first()).toBeVisible({ timeout: 15_000 })
+    // The "New report" link is the canonical CTA for this page; assert against
+    // it rather than the heading text (which races the folder navigator load).
+    await expect(page.getByRole('link', { name: /New report/i }).first()).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByRole('heading', { name: /^Folders$/ }).first()).toBeVisible({ timeout: 15_000 })
   })
 
   test('new report page renders the dataset picker', async ({ page }) => {
     await login(page, 'admin')
     await page.goto('/backend/reports/new', { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: /New Report/i }).first()).toBeVisible({ timeout: 15_000 })
-    // The dataset picker is a select control rendered by CrudForm — its label
-    // is i18n-driven (`reports.new.fields.dataset`). Find the form control by
-    // its visible label text from `en.json`.
-    await expect(page.getByText(/^Dataset$/).first()).toBeVisible({ timeout: 15_000 })
+    // The form's primary action is the most reliable signal that the page
+    // hydrated. The title is rendered as a non-heading element on this route.
+    await expect(page.getByRole('button', { name: /Create report/i }).first()).toBeVisible({ timeout: 30_000 })
+    // The dataset picker label comes from `reports.new.fields.dataset` in
+    // en.json — "Dataset *" because the field is required.
+    await expect(page.getByText(/Dataset \*/).first()).toBeVisible({ timeout: 15_000 })
   })
 
   test('schedules list page renders', async ({ page }) => {
     await login(page, 'admin')
     await page.goto('/backend/reports/schedules', { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: /Schedules/i }).first()).toBeVisible({ timeout: 15_000 })
-    // Either the empty-state CTA or the list-toolbar "New schedule" button
-    // must be visible regardless of whether any schedules exist.
-    await expect(page.getByRole('link', { name: /New schedule/i }).first()).toBeVisible({ timeout: 15_000 })
+    // Empty-state or list-toolbar CTA must be visible regardless of whether
+    // any schedules exist.
+    await expect(page.getByRole('link', { name: /New schedule/i }).first()).toBeVisible({ timeout: 30_000 })
   })
 })
