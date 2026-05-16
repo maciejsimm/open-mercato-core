@@ -39,6 +39,7 @@
   "reports.detail.error.datasetLoad": "Nie udało się załadować zbioru danych.",
   "reports.detail.error.delete": "Nie udało się usunąć raportu.",
   "reports.detail.error.load": "Nie udało się załadować raportu.",
+  "reports.detail.error.loadTimeout": "Loading timed out after 15 s. Check the network tab and reload the page.",
   "reports.detail.error.noFields": "Wybierz co najmniej jedno pole przed zapisaniem.",
   "reports.detail.error.notFound": "Raport nie został znaleziony lub jest niewidoczny.",
   "reports.detail.error.run": "Nie udało się uruchomić raportu.",

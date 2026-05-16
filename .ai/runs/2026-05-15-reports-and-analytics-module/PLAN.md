@@ -52,6 +52,7 @@
 | 3 | 3.9b | Embeds admin page (`/backend/reports/embeds`) — defer | todo | — |
 | 3 | 3.10 | Expose `detail:customers.company:after-header` and `detail:customers.person:after-header` injection spots | done | 369ddf0ef |
 | 3 | 3.11 | `record-embed-host` widget registered on `detail:customers.{person,company}:after-header` | done | 5cc28de8f |
+| 3 | 3.3a-fix2 | Bullet-proof the report detail spinner: drop cancelled-guard, add diagnostics + 15s safety timeout | done | 27e189842 |
 | 4 | 4.1 | `ReportSchedule` entity + CRUD + commands | todo | — |
 | 4 | 4.2 | Workers: `reports-schedule-runner`, `reports-schedule-execute`, `reports-async-execute`, `reports-export-build` | todo | — |
 | 4 | 4.3 | `lib/email-attachments.ts` + `ScheduledReportEmail` React template | todo | — |

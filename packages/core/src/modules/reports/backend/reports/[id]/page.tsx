@@ -408,12 +408,15 @@ export default function ReportBuilderPage() {
   const [isDirty, setIsDirty] = React.useState(false)
   const [runResult, setRunResult] = React.useState<ReportRunResponse | null>(null)
 
-  // Single load effect. Depends ONLY on reportId — translation is accessed
-  // via tRef so locale flicker cannot retrigger the load (previously caused
-  // an endless spinner when t was not perfectly stable).
+  // Load effect — depends only on reportId. We deliberately do NOT gate
+  // `setIsLoading(false)` on a cancelled flag any more: an earlier bullet
+  // (3.3a) only dropped `t` from the deps but the spinner kept reproducing
+  // in dev. Always clearing the loading flag is safer than ever leaving the
+  // user staring at a spinner — if the component unmounted, React swallows
+  // the state set with a warning we can act on.
   React.useEffect(() => {
     if (!reportId) return
-    let cancelled = false
+    let active = true
     async function load() {
       setIsLoading(true)
       setLoadError(null)
@@ -424,15 +427,32 @@ export default function ReportBuilderPage() {
           undefined,
           { fallback: { items: [] } },
         )
-        if (cancelled) return
+        if (!active) return
         if (!reportCall.ok) {
-          setLoadError(tRef.current('reports.detail.error.load', 'Failed to load report.'))
+          setLoadError(
+            tRef.current(
+              'reports.detail.error.load',
+              `Failed to load report (HTTP ${reportCall.status}).`,
+            ),
+          )
+          if (typeof console !== 'undefined') {
+            console.warn('[reports/detail] report list call failed', {
+              status: reportCall.status,
+              reportId,
+            })
+          }
           return
         }
         const items = Array.isArray(reportCall.result?.items) ? reportCall.result!.items! : []
         const found = items[0]
         if (!found) {
           setLoadError(tRef.current('reports.detail.error.notFound', 'Report not found or not visible.'))
+          if (typeof console !== 'undefined') {
+            console.warn('[reports/detail] report not found in list response', {
+              reportId,
+              totalReturned: items.length,
+            })
+          }
           return
         }
         setReport(found)
@@ -444,25 +464,60 @@ export default function ReportBuilderPage() {
         const datasetCall = await apiCall<DatasetDetail>(
           `/api/reports/datasets/${encodeURIComponent(found.datasetId)}`,
         )
-        if (cancelled) return
+        if (!active) return
         if (datasetCall.ok && datasetCall.result) {
           setDataset(datasetCall.result)
         } else {
-          setLoadError(tRef.current('reports.detail.error.datasetLoad', 'Failed to load dataset.'))
+          setLoadError(
+            tRef.current(
+              'reports.detail.error.datasetLoad',
+              `Failed to load dataset '${found.datasetId}' (HTTP ${datasetCall.status}).`,
+            ),
+          )
+          if (typeof console !== 'undefined') {
+            console.warn('[reports/detail] dataset call failed', {
+              datasetId: found.datasetId,
+              status: datasetCall.status,
+            })
+          }
         }
       } catch (err) {
-        if (cancelled) return
         const message = err instanceof Error
           ? err.message
           : tRef.current('reports.detail.error.load', 'Failed to load report.')
-        setLoadError(message)
+        if (typeof console !== 'undefined') {
+          console.error('[reports/detail] load threw', err)
+        }
+        if (active) setLoadError(message)
       } finally {
-        if (!cancelled) setIsLoading(false)
+        // Always clear the spinner, even if the effect was cancelled mid-flight
+        // (React swallows the state set with a warning rather than leaving the
+        // user stuck on a spinner forever).
+        setIsLoading(false)
       }
     }
     load()
-    return () => { cancelled = true }
+    return () => { active = false }
   }, [reportId])
+
+  // Safety net: if loading has not resolved after 15 seconds, force-exit
+  // the loading state and surface a generic error so the user can recover.
+  React.useEffect(() => {
+    if (!isLoading) return
+    const handle = window.setTimeout(() => {
+      setIsLoading(false)
+      setLoadError(
+        tRef.current(
+          'reports.detail.error.loadTimeout',
+          'Loading timed out after 15 s. Check the network tab and reload the page.',
+        ),
+      )
+      if (typeof console !== 'undefined') {
+        console.warn('[reports/detail] load timed out after 15 s', { reportId })
+      }
+    }, 15_000)
+    return () => window.clearTimeout(handle)
+  }, [isLoading, reportId])
 
   const datasetFields = dataset?.fields ?? []
   const canEdit = report?.permission === 'edit'

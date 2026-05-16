@@ -39,6 +39,7 @@
   "reports.detail.error.datasetLoad": "No se pudo cargar el conjunto de datos.",
   "reports.detail.error.delete": "No se pudo eliminar el informe.",
   "reports.detail.error.load": "No se pudo cargar el informe.",
+  "reports.detail.error.loadTimeout": "Loading timed out after 15 s. Check the network tab and reload the page.",
   "reports.detail.error.noFields": "Selecciona al menos un campo antes de guardar.",
   "reports.detail.error.notFound": "Informe no encontrado o no visible.",
   "reports.detail.error.run": "No se pudo ejecutar el informe.",

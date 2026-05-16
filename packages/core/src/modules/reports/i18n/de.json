@@ -39,6 +39,7 @@
   "reports.detail.error.datasetLoad": "Datensatz konnte nicht geladen werden.",
   "reports.detail.error.delete": "Bericht konnte nicht gelöscht werden.",
   "reports.detail.error.load": "Bericht konnte nicht geladen werden.",
+  "reports.detail.error.loadTimeout": "Loading timed out after 15 s. Check the network tab and reload the page.",
   "reports.detail.error.noFields": "Wählen Sie vor dem Speichern mindestens ein Feld aus.",
   "reports.detail.error.notFound": "Bericht nicht gefunden oder nicht sichtbar.",
   "reports.detail.error.run": "Bericht konnte nicht ausgeführt werden.",

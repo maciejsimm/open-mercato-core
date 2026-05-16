@@ -39,6 +39,7 @@
   "reports.detail.error.datasetLoad": "Failed to load dataset.",
   "reports.detail.error.delete": "Failed to delete report.",
   "reports.detail.error.load": "Failed to load report.",
+  "reports.detail.error.loadTimeout": "Loading timed out after 15 s. Check the network tab and reload the page.",
   "reports.detail.error.noFields": "Pick at least one field before saving.",
   "reports.detail.error.notFound": "Report not found or not visible.",
   "reports.detail.error.run": "Failed to run report.",
