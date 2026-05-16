@@ -58,7 +58,7 @@
 | 4 | 4.1 | `ReportSchedule` entity + CRUD + commands | done | 000894c23 |
 | 4 | 4.2 | Workers: `reports-schedule-runner`, `reports-schedule-execute`, `reports-async-execute`, `reports-export-build` | done | a0534e018 |
 | 4 | 4.3 | `lib/email-attachments.ts` + `ScheduledReportEmail` React template | todo | — |
-| 4 | 4.4 | `notifications.ts` + `notifications.client.ts` (execution_ready, schedule_delivered, export_ready) | todo | — |
+| 4 | 4.4 | `notifications.ts` + `notifications.client.ts` (execution_ready, schedule_delivered, export_ready) | done | f19601a6a |
 | 4 | 4.5 | Async execute path: write result to `attachments`, emit notification | todo | — |
 | 4 | 4.6 | Schedule editor UI: `/backend/reports/schedules` + per-report Schedule modal | done | 4863923fa |
 | 5 | 5.1 | Result cache (Redis tier via DI `cache`) + tag-based invalidation | todo | — |
