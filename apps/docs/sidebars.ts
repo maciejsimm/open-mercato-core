@@ -413,6 +413,7 @@ const sidebars: SidebarsConfig = {
             "framework/modules/communication-channels",
             "framework/modules/messages",
             "framework/modules/currencies",
+            "framework/modules/reports",
             "framework/modules/integrations-data-sync",
             "framework/modules/integrations-oauth-grants",
             "framework/modules/sales-providers",

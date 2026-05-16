@@ -1,0 +1,215 @@
+---
+title: reports module
+description: Datasets-as-code, the visual builder, scheduling, embedding, and the field-level ACL contract.
+---
+
+# reports module
+
+- **Module id**: `reports`
+- **Package**: `@open-mercato/core`
+- **Entities**: `Report`, `ReportFolder`, `ReportFolderShare`, `ReportDashboard`, `ReportEmbed`, `ReportSchedule`, `ReportExecution`
+- **Features**: `reports.view`, `reports.author`, `reports.share`, `reports.schedule`, `reports.export`, `reports.embed.manage`, `reports.admin`
+
+The reports module turns indexed data into typed reports, dashboards, and embedded record-page widgets. Reports are five-typed (`flat_list`, `grouped`, `pivot`, `chart`, `summary`), powered by the Query Engine, and gated by a three-point field-level ACL contract.
+
+## Architecture in one screen
+
+```
+┌────────────────────────────┐     ┌──────────────────────────┐
+│ <module>/reports.ts        │     │ /backend/reports          │
+│   defineDataset(...)       │     │   - list + folder nav     │
+└──────────┬─────────────────┘     │   - builder (flat/agg)    │
+           │ yarn generate         │   - run + export          │
+           ▼                       │   - dashboards composer   │
+┌────────────────────────────┐     │   - embeds admin          │
+│ datasets-registry.ts       │     │   - schedules list/new    │
+└──────────┬─────────────────┘     └──────────────┬───────────┘
+           │                                       │
+           ▼                                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ lib/execute.ts — executeReport / executeFlatList             │
+│   field-acl → params → translate → QE → aggregate            │
+│   wrapped by result-cache + profiler                         │
+└─────────────────────────────┬────────────────────────────────┘
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│ @open-mercato/shared/lib/query  (Hybrid + Basic engines)     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Datasets-as-code
+
+A **dataset** is the platform contract between a module's data and the reports module. Each module exports a `defineDataset(...)` from `<module>/reports.ts`:
+
+```ts title="packages/core/src/modules/customers/reports.ts"
+import { defineDataset, entityId } from '@open-mercato/shared/modules/reports/dsl'
+
+export default [
+  defineDataset({
+    id: 'customers:person',
+    moduleId: 'customers',
+    labelKey: 'customers.reports.datasets.people.label',
+    entityType: entityId('customers:person'),
+    requiredFeatures: ['customers.view'],
+    fields: [
+      { key: 'id', label: 'ID', kind: 'string' },
+      { key: 'firstName', label: 'First name', kind: 'string' },
+      { key: 'lastName', label: 'Last name', kind: 'string' },
+      { key: 'email', label: 'Email', kind: 'string', sensitive: true },
+      { key: 'createdAt', label: 'Created at', kind: 'date' },
+    ],
+    fieldAcl: {
+      email: ['customers.pii.view'],
+    },
+    defaultSort: [{ field: 'createdAt', dir: 'desc' }],
+  }),
+]
+```
+
+`yarn generate` discovers every `<module>/reports.ts` and aggregates them into `reports-datasets.generated.ts`. The builder UI, the run API, and the CLI all read from the same registry — there is no schema-as-code drift.
+
+### Field-ACL contract
+
+Field-level ACL is enforced at **three** points:
+
+1. **Builder load** — `lib/datasets-registry.ts` filters fields out of `GET /api/reports/datasets/[id]` when the caller lacks the field's ACL.
+2. **Save** — `validateDefinitionAgainstAcl(...)` in `lib/field-redact.ts` rejects definitions that reference fields the caller cannot see.
+3. **Run** — the same validator runs again against the **running** user's features, not the report owner's. A user who loses a feature cannot run a saved report that uses gated fields.
+
+The contract is detailed in `packages/core/src/modules/reports/lib/field-redact.ts`.
+
+## Builder (`/backend/reports`)
+
+The builder is a per-report-type composition of:
+
+- **Field picker** — drag-and-drop from the dataset's allowed fields into one of the active panes (flat fields, group-by keys, measures, pivot rows/cols, chart x-axis).
+- **Filters** — typed by field kind: literal + 12 date-range tokens (`today`, `last_7_days`, `last_30_days`, `current_quarter`, …). Pluggable parameter sources (literal vs. parameter binding) land in 3.3c.
+- **Sort** — multi-key with directions. Aggregated reports sort on group keys or measure aliases.
+- **Limit** — caps the result set after aggregation.
+- **Parameters** — declared per-report; resolved at run time via `lib/parameters.ts`. Three sources: literal value, named token (e.g. `:today`, `:last_7_days`), or user-supplied request param.
+
+A drag from the field list shows a `<DragOverlay>` ghost (using `@dnd-kit/core`) so the field follows the cursor. Drop on any pane; the builder accepts only fields visible to the user's ACL.
+
+## Aggregation engine
+
+`lib/aggregator.ts` runs the four aggregated paths in memory after the Query Engine returns rows:
+
+| Type | Helper | Output shape |
+|------|--------|--------------|
+| `grouped` | `aggregateGroupBy` | One row per group; one column per measure (`measureAlias(m)`). |
+| `summary` | `aggregateSummary` | Single row with one column per measure. |
+| `pivot` | `aggregatePivot` + `pivotToWideRows` | Wide-format: one row per row-key combination, one column per col-key combination (`row-keys ‖ col-headers`). |
+| `chart` | `aggregateGroupBy` | Same as grouped, plus a chart-render plan from `lib/chart-spec.ts`. |
+
+Six aggregations are supported: `count`, `count_distinct`, `sum`, `avg`, `min`, `max`. Measure expressions are described in `lib/aggregator.ts:MeasureExpr`. Charts render through Recharts wrappers in `widgets/charts/*` (Bar / Line / Pie / Area / Donut / Scatter / Combo).
+
+## Async dispatch
+
+Synchronous runs cap at `OM_REPORTS_INMEMORY_CAP` rows (default 25 000). When a run is requested as `async` or the dataset's estimated row count exceeds the cap, `shouldDispatchAsync(...)` returns an `AsyncDispatch` payload and the route returns `202 Accepted` — the `reports-async-execute` worker picks the job up off the queue.
+
+## Result cache
+
+`lib/result-cache.ts` wraps `executeReport` with read-through caching. Cache keys are a sha256 of `(definition, params, parameterDefs, userFeatureFingerprint)`, scoped by `(tenantId, organizationId, reportId)`. Different users with different ACL feature sets never share results.
+
+Entries are tagged with:
+
+- `tenant:<id>`
+- `reports:org:<id>`
+- `reports:report:<id>`
+- `reports:dataset:<id>`
+
+So when `reports.report.update` runs, the command issues `cacheService.deleteByTags(['tenant:<id>', 'reports:report:<id>', 'reports:dataset:<id>'])` and downstream runs miss the cache exactly once. Truncated results bypass caching to avoid masking a growing dataset.
+
+The wrapper is wired into `/api/reports/[id]/run` and the dashboards tile runner. Workers (`reports-async-execute`, `reports-schedule-execute`) and `lib/export.ts` are deliberately uncached — they already run under queue concurrency control or are one-shot.
+
+## Scheduling
+
+`ReportSchedule` rows declare a cadence in one of three formats:
+
+- `weekly:<dow>@HH:MM`  (e.g. `weekly:mon@09:00`)
+- `monthly:<1..28>@HH:MM`  (e.g. `monthly:1@09:00`)
+- `cron:<expr>`  (e.g. `cron:0 9 * * 1`)
+
+Cadence math lives in `lib/schedule-cadence.ts` and uses `Intl.DateTimeFormat.formatToParts` to respect IANA timezones. Four workers cover the scheduled-execution path:
+
+| Worker | Queue | Purpose |
+|--------|-------|---------|
+| `reports-schedule-runner` | `reports-schedule-runner` | Tick every minute; query `next_run_at <= now()` via the partial index; enqueue schedule-execute jobs. Idempotent — never advances `next_run_at` itself. |
+| `reports-schedule-execute` | `reports-schedule-execute` | Run one schedule. Skips if `next_run_at` was bumped after the runner enqueued it. On 3 consecutive failures, auto-disables the schedule. Enqueues one `reports-export-build` job per declared format. |
+| `reports-async-execute` | `reports-async-execute` | Ad-hoc large-report execution off the main request path. Phase 4.5 will write the result into the `attachments` module and emit the `reports.execution_ready` notification. |
+| `reports-export-build` | `reports-export-build` | Renders a single export artifact (CSV today; XLSX once `exceljs` lands). |
+| `reports-executions-prune` | `reports-executions-prune` | Daily retention: delete `reports_executions` rows older than `OM_REPORTS_EXECUTION_RETENTION_DAYS` (30) and reap orphan `running` rows older than `OM_REPORTS_ASYNC_TIMEOUT_MS + 60s`. |
+
+The schedule editor lives at `/backend/reports/schedules` (list) and `/backend/reports/schedules/new` (create). Toggle/delete actions sit in the row action menu.
+
+## Notifications
+
+Three notification types ship with the module:
+
+| Type | When | Renderer |
+|------|------|----------|
+| `reports.execution_ready` | An async execute finishes | `widgets/notifications/ReportExecutionReadyRenderer.tsx` — tap to view the report |
+| `reports.schedule_delivered` | A scheduled email is sent | `ReportScheduleDeliveredRenderer` — tap to view the schedule |
+| `reports.export_ready` | An export-build worker completes | `ReportExportReadyRenderer` — tap to download |
+
+All three renderers share `ReportNotificationCard.tsx`, a status-token-driven shell (no hardcoded color shades) that respects the unread state and severity. Hooks are wired in `notifications.client.ts`; declarations live in `notifications.ts`.
+
+## Embedded reports + dashboards
+
+`ReportEmbed` rows attach a report or dashboard to a widget spot id (e.g. `crud-form:customers.person:fields`). Each embed declares parameter bindings — either a literal value or `{ source: 'record-field', recordField: 'id' }` to pull from the host record at render time. The record-embed-host widget at `widgets/injection/record-embed-host.tsx` renders the embed inline on the customers / companies detail pages without re-implementing the run pipeline.
+
+## CLI
+
+```bash
+# Rebuild the Public root folder for every org (idempotent)
+yarn mercato reports rebuild-folders [--tenant <id>] [--org <id>]
+
+# List every declared dataset
+yarn mercato reports list-datasets
+
+# Execute a saved report from the terminal
+yarn mercato reports run <reportId> [--tenant <id>] [--org <id>] \
+  [--params '{"from":"2026-01-01"}'] [--json]
+```
+
+The CLI uses super-admin features so it is intentionally **not** suitable for end-user workflows — it is for ops, debugging, and integration testing.
+
+## Profiling
+
+Set `OM_PROFILE=reports.*` (or any matching pattern from `@open-mercato/shared/lib/profiler`) to emit `[reports:profile]` payloads per execution. Sections recorded per run:
+
+- `field-acl`
+- `parameters`
+- `translate`
+- `query.execute`
+- `aggregate.<type>` (one per `grouped`/`summary`/`pivot`/`chart`)
+
+The Query Engine emits its own `[qe:profile]` snapshot in parallel, so both appear in stdout when the env flag is active.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OM_REPORTS_INMEMORY_CAP` | `25000` | Sync execution row cap; runs over this dispatch async. |
+| `OM_REPORTS_EXECUTION_RETENTION_DAYS` | `30` | Days to keep `reports_executions` rows before pruning. |
+| `OM_REPORTS_ASYNC_TIMEOUT_MS` | `900000` (15 min) | Orphan-reaper threshold (plus 60 s grace). |
+
+## ACL features
+
+| Feature | Grants |
+|---------|--------|
+| `reports.view` | List + run reports / dashboards / embeds |
+| `reports.author` | Create + edit reports |
+| `reports.share` | Manage `ReportFolderShare` rows |
+| `reports.schedule` | Manage schedules |
+| `reports.export` | Trigger ad-hoc CSV / XLSX export |
+| `reports.embed.manage` | Manage `ReportEmbed` rows |
+| `reports.admin` | Module-wide admin (super-set; included in `admin` role by default) |
+
+`admin` and `employee` are seeded with sensible defaults in `setup.ts`. Run `yarn mercato auth sync-role-acls` after pulling this module into an existing tenant.
+
+## See also
+
+- [Open Mercato spec — Reports & Analytics Module](https://github.com/anthropics/open-mercato/blob/main/.ai/specs/2026-05-15-reports-and-analytics-module.md) (in-repo at `.ai/specs/2026-05-15-reports-and-analytics-module.md`).
+- The customers reference module for the dataset declaration pattern.
+- The Query Engine docs for how field projection + filters reach the database.
