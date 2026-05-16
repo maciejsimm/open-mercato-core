@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
@@ -384,8 +384,7 @@ function addFieldToZone(
   return prev
 }
 
-export default function ReportBuilderPage() {
-  const params = useParams() as { id?: string }
+export default function ReportBuilderPage({ params }: { params?: { id?: string } }) {
   const router = useRouter()
   const t = useT()
   const tRef = React.useRef(t)
