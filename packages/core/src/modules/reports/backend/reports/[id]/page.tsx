@@ -23,6 +23,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@open-mercato/ui/primitives/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@open-mercato/ui/primitives/tabs'
 import {
   DndContext,
   DragOverlay,
@@ -930,7 +931,15 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
               onDragCancel={handleDragCancel}
             >
               <div className="flex flex-col gap-4 lg:flex-row">
-                <aside className="w-full shrink-0 lg:w-60">
+                <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-60">
+                  <div className="rounded-md border border-border bg-card p-3">
+                    <TypeSelect
+                      value={definition.type}
+                      onChange={handleTypeChange}
+                      canEdit={canEdit}
+                      t={t}
+                    />
+                  </div>
                   <FieldList
                     fields={datasetFields}
                     hiddenPaths={dataset?.hiddenFieldPaths ?? []}
@@ -938,27 +947,15 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                     t={t}
                   />
                 </aside>
-                <div className="flex min-w-0 flex-1 flex-col gap-4">
-                  <TypeSwitcher
-                    value={definition.type}
-                    onChange={handleTypeChange}
-                    canEdit={canEdit}
-                    t={t}
-                  />
-                  <PerTypeCanvas
-                    definition={definition}
-                    fields={datasetFields}
-                    canEdit={canEdit}
-                    onChange={(next) => { setDefinition(next); markDirty() }}
-                    t={t}
-                  />
-                  <ParametersSection
-                    parameters={parameters}
-                    canEdit={canEdit}
-                    onChange={(next) => { setParameters(next); markDirty() }}
-                    t={t}
-                  />
-                </div>
+                <EditorTabsCard
+                  definition={definition}
+                  parameters={parameters}
+                  fields={datasetFields}
+                  canEdit={canEdit}
+                  onDefinitionChange={(next) => { setDefinition(next); markDirty() }}
+                  onParametersChange={(next) => { setParameters(next); markDirty() }}
+                  t={t}
+                />
               </div>
               <DragOverlay dropAnimation={null}>
                 {activeDragField ? (
@@ -1292,7 +1289,7 @@ function DraggableFieldRow({ field, canEdit, t }: DraggableFieldRowProps) {
 
 // ---------- Type switcher ----------
 
-type TypeSwitcherProps = {
+type TypeSelectProps = {
   value: ReportType
   onChange: (next: ReportType) => void
   canEdit: boolean
@@ -1301,26 +1298,21 @@ type TypeSwitcherProps = {
 
 const TYPE_OPTIONS: ReadonlyArray<ReportType> = ['flat_list', 'grouped', 'pivot', 'chart', 'summary']
 
-function TypeSwitcher({ value, onChange, canEdit, t }: TypeSwitcherProps) {
+function TypeSelect({ value, onChange, canEdit, t }: TypeSelectProps) {
   return (
-    <section className="space-y-2 rounded-md border border-border bg-card p-4">
-      <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.type', 'Report type')}</h2>
-      <div className="flex flex-wrap gap-2">
+    <label className="block space-y-1">
+      <span className="text-overline text-muted-foreground">{t('reports.detail.sections.type', 'Report type')}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as ReportType)}
+        disabled={!canEdit}
+        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+      >
         {TYPE_OPTIONS.map((option) => (
-          <Button
-            key={option}
-            type="button"
-            size="sm"
-            variant={value === option ? 'default' : 'outline'}
-            onClick={() => onChange(option)}
-            disabled={!canEdit}
-            aria-pressed={value === option}
-          >
-            {t(`reports.list.types.${option}`, option)}
-          </Button>
+          <option key={option} value={option}>{t(`reports.list.types.${option}`, option)}</option>
         ))}
-      </div>
-    </section>
+      </select>
+    </label>
   )
 }
 
@@ -1340,22 +1332,6 @@ function PerTypeCanvas({ definition, fields, canEdit, onChange, t }: CanvasProps
     for (const f of fields) map.set(f.key, f)
     return map
   }, [fields])
-
-  const filterableFields = React.useMemo(
-    () => fields.filter((f) => f.filterable !== false),
-    [fields],
-  )
-
-  const filtersSection = (
-    <FiltersSection
-      filters={definition.filters as FilterShape[]}
-      fields={filterableFields}
-      fieldByKey={fieldByKey}
-      canEdit={canEdit}
-      onChange={(nextFilters) => onChange({ ...definition, filters: nextFilters } as Definition)}
-      t={t}
-    />
-  )
 
   const typeCanvas = (() => {
     switch (definition.type) {
@@ -1416,10 +1392,92 @@ function PerTypeCanvas({ definition, fields, canEdit, onChange, t }: CanvasProps
     }
   })()
 
+  return typeCanvas ?? null
+}
+
+// ---------- Editor tabs (Fields / Filters / Parameters) ----------
+
+type EditorTabsCardProps = {
+  definition: Definition
+  parameters: ParameterDef[]
+  fields: DatasetFieldRow[]
+  canEdit: boolean
+  onDefinitionChange: (next: Definition) => void
+  onParametersChange: (next: ParameterDef[]) => void
+  t: ReturnType<typeof useT>
+}
+
+function EditorTabsCard({
+  definition,
+  parameters,
+  fields,
+  canEdit,
+  onDefinitionChange,
+  onParametersChange,
+  t,
+}: EditorTabsCardProps) {
+  const fieldByKey = React.useMemo(() => {
+    const map = new Map<string, DatasetFieldRow>()
+    for (const f of fields) map.set(f.key, f)
+    return map
+  }, [fields])
+
+  const filterableFields = React.useMemo(
+    () => fields.filter((f) => f.filterable !== false),
+    [fields],
+  )
+
+  const filterCount = (definition.filters as FilterShape[] | undefined)?.length ?? 0
+  const parameterCount = parameters.length
+
   return (
-    <div className="space-y-3">
-      {typeCanvas}
-      {filtersSection}
+    <div className="flex min-w-0 flex-1 flex-col rounded-md border border-border bg-card">
+      <Tabs defaultValue="fields" className="flex flex-1 flex-col">
+        <div className="border-b border-border px-3 py-2">
+          <TabsList>
+            <TabsTrigger value="fields">{t('reports.detail.tabs.fields', 'Fields')}</TabsTrigger>
+            <TabsTrigger value="filters">
+              {t('reports.detail.tabs.filters', 'Filters')}
+              {filterCount > 0 ? (
+                <span className="ml-2 rounded-full bg-muted px-1.5 text-xs font-medium">{filterCount}</span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger value="parameters">
+              {t('reports.detail.tabs.parameters', 'Parameters')}
+              {parameterCount > 0 ? (
+                <span className="ml-2 rounded-full bg-muted px-1.5 text-xs font-medium">{parameterCount}</span>
+              ) : null}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="fields" className="flex-1 p-3">
+          <PerTypeCanvas
+            definition={definition}
+            fields={fields}
+            canEdit={canEdit}
+            onChange={onDefinitionChange}
+            t={t}
+          />
+        </TabsContent>
+        <TabsContent value="filters" className="flex-1 p-3">
+          <FiltersSection
+            filters={definition.filters as FilterShape[]}
+            fields={filterableFields}
+            fieldByKey={fieldByKey}
+            canEdit={canEdit}
+            onChange={(nextFilters) => onDefinitionChange({ ...definition, filters: nextFilters } as Definition)}
+            t={t}
+          />
+        </TabsContent>
+        <TabsContent value="parameters" className="flex-1 p-3">
+          <ParametersSection
+            parameters={parameters}
+            canEdit={canEdit}
+            onChange={onParametersChange}
+            t={t}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -1654,12 +1712,9 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
         </SortableContext>
       </Zone>
 
-      <Zone
-        zoneId="sort"
-        title={t('reports.detail.zones.sort', 'Sort')}
-        description={t('reports.detail.zones.sortHint', 'First sort key wins; drag a field here or pick one below.')}
-      >
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_minmax(0,180px)]">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.sort', 'Sort')}</span>
           <select
             value={sortField}
             onChange={(e) => {
@@ -1668,13 +1723,16 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
               setSort([{ field: value, dir: sortDir }])
             }}
             disabled={!canEdit}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
             <option value="">{t('reports.detail.fields.sortNone', 'No sort')}</option>
             {sortableFields.map((f) => (
               <option key={f.key} value={f.key}>{t(f.labelKey, f.key)}</option>
             ))}
           </select>
+        </label>
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-foreground">{t('reports.detail.fields.sortDir', 'Direction')}</span>
           <select
             value={sortDir}
             onChange={(e) => {
@@ -1682,35 +1740,32 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
               setSort([{ field: sortField, dir: e.target.value as 'asc' | 'desc' }])
             }}
             disabled={!canEdit || !sortField}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
             <option value="asc">{t('reports.detail.fields.sortAsc', 'Ascending')}</option>
             <option value="desc">{t('reports.detail.fields.sortDesc', 'Descending')}</option>
           </select>
-        </div>
-      </Zone>
-
-      <Zone
-        title={t('reports.detail.zones.limit', 'Limit')}
-        description={t('reports.detail.zones.limitHint', 'Optional row cap (max 100 000).')}
-      >
-        <Input
-          type="number"
-          min={1}
-          max={100000}
-          value={definition.limit ?? ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            if (!raw.trim()) return setLimit(undefined)
-            const parsed = Number(raw)
-            if (!Number.isFinite(parsed) || parsed <= 0) return
-            setLimit(Math.min(Math.floor(parsed), 100_000))
-          }}
-          disabled={!canEdit}
-          placeholder={t('reports.detail.fields.limitPlaceholder', 'No limit')}
-          className="max-w-xs"
-        />
-      </Zone>
+        </label>
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.limit', 'Limit')}</span>
+          <Input
+            type="number"
+            min={1}
+            max={100000}
+            value={definition.limit ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (!raw.trim()) return setLimit(undefined)
+              const parsed = Number(raw)
+              if (!Number.isFinite(parsed) || parsed <= 0) return
+              setLimit(Math.min(Math.floor(parsed), 100_000))
+            }}
+            disabled={!canEdit}
+            placeholder={t('reports.detail.fields.limitPlaceholder', 'No limit')}
+            className="h-9"
+          />
+        </label>
+      </div>
     </div>
   )
 }
