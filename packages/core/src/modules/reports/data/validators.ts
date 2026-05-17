@@ -341,6 +341,18 @@ export const reportRunSchema = z.object({
 })
 export type ReportRunInput = z.infer<typeof reportRunSchema>
 
+// ---------- Preview (ad-hoc, unsaved definition) ----------
+
+export const reportPreviewSchema = z.object({
+  datasetId: datasetIdSchema,
+  definition: reportDefinitionSchema,
+  parameters: z.array(parameterDefSchema).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+  /** Hard cap on preview rows. Defaults to 10; max 100. */
+  limit: z.number().int().min(1).max(100).optional(),
+})
+export type ReportPreviewInput = z.infer<typeof reportPreviewSchema>
+
 // ---------- Dashboards ----------
 
 const tileModeSchema = z.enum(['inline', 'summary', 'chart-only'])

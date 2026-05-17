@@ -475,6 +475,8 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   const [isRunning, setIsRunning] = React.useState(false)
   const [isDirty, setIsDirty] = React.useState(false)
   const [runResult, setRunResult] = React.useState<ReportRunResponse | null>(null)
+  const [previewResult, setPreviewResult] = React.useState<ReportRunResponse | null>(null)
+  const [isPreviewing, setIsPreviewing] = React.useState(false)
   const [viewMode, setViewMode] = React.useState<'edit' | 'run'>('edit')
   const [settingsOpen, setSettingsOpen] = React.useState(false)
 
@@ -816,6 +818,60 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     }
   }, [canEdit, confirm, report, router, t])
 
+  // ----- Auto-preview (edit mode) ---------------------------------------
+  // Re-runs an ad-hoc preview against /api/reports/preview whenever the
+  // definition or parameters change. Debounced so a chip reorder / typed
+  // alias doesn't fire on every keystroke; capped at 10 rows server-side
+  // so the call is cheap. Skipped in run mode (the full result lives in
+  // `runResult` and is updated by the explicit Run action instead).
+  const previewToken = React.useRef(0)
+  React.useEffect(() => {
+    if (viewMode !== 'edit') return
+    if (!report) return
+    // Heuristic validity guard: skip the call when the definition cannot
+    // possibly return rows. The preview endpoint would reject these too,
+    // but checking client-side keeps spinner noise down.
+    const def = definition as Definition
+    let valid = true
+    if (def.type === 'flat_list') valid = def.fields.length > 0
+    else if (def.type === 'grouped') valid = def.groupBy.length > 0 && def.measures.length > 0
+    else if (def.type === 'pivot') valid = def.rows.length > 0 && !!def.value && !!def.value.field
+    else if (def.type === 'chart') valid = (def.measures?.length ?? 0) > 0 && !!def.chart?.xField
+    else if (def.type === 'summary') valid = def.measures.length > 0
+    if (!valid) {
+      setPreviewResult(null)
+      setIsPreviewing(false)
+      return
+    }
+
+    const token = ++previewToken.current
+    const handle = setTimeout(async () => {
+      setIsPreviewing(true)
+      try {
+        const res = await readApiResultOrThrow<ReportRunResponse>('/api/reports/preview', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            datasetId: report.datasetId,
+            definition,
+            parameters,
+            limit: 10,
+          }),
+        })
+        if (token === previewToken.current) setPreviewResult(res ?? null)
+      } catch (err) {
+        // Preview errors are not surfaced as flash messages — they would be
+        // noisy on every typed character. The user still gets a clear error
+        // on the explicit Run path.
+        if (typeof console !== 'undefined') console.debug('[reports/preview] failed', err)
+        if (token === previewToken.current) setPreviewResult(null)
+      } finally {
+        if (token === previewToken.current) setIsPreviewing(false)
+      }
+    }, 450)
+    return () => clearTimeout(handle)
+  }, [viewMode, report, definition, parameters])
+
   if (isLoading) {
     return (
       <Page>
@@ -920,8 +976,8 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
           <PreviewSection
             definition={definition}
-            runResult={runResult}
-            isRunning={isRunning}
+            runResult={viewMode === 'run' ? runResult : previewResult}
+            isRunning={viewMode === 'run' ? isRunning : isPreviewing}
             viewMode={viewMode}
             t={t}
           />
@@ -2901,7 +2957,7 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
     : 'rounded-md border border-border bg-card p-4 min-h-[40vh]'
   const headingLabel = viewMode === 'run'
     ? t('reports.detail.sections.result', 'Result')
-    : t('reports.detail.sections.preview', 'Preview')
+    : t('reports.detail.sections.previewLive', 'Live preview (10 rows)')
 
   if (definition.type === 'chart') {
     return (
@@ -2911,7 +2967,7 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
           <p className="mt-2 text-sm text-muted-foreground">
             {runResult
               ? t('reports.detail.preview.empty', 'The report returned no rows.')
-              : t('reports.detail.preview.notRun', 'Click "Run" to execute this report.')}
+              : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
           </p>
         ) : (
           <div className="mt-3">
@@ -2929,7 +2985,7 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
         <span className="text-xs text-muted-foreground">
           {runResult?.total != null
             ? t('reports.detail.preview.rowCount', '{count} rows').replace('{count}', String(runResult.total))
-            : t('reports.detail.preview.notRun', 'Click "Run" to execute this report.')}
+            : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
         </span>
       </div>
       {isRunning ? (
@@ -2938,7 +2994,7 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
         </div>
       ) : renderedRows.length === 0 ? (
         <p className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
-          {runResult ? t('reports.detail.preview.empty', 'The report returned no rows.') : t('reports.detail.preview.notRun', 'Click "Run" to execute this report.')}
+          {runResult ? t('reports.detail.preview.empty', 'The report returned no rows.') : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
         </p>
       ) : (
         <div className="overflow-x-auto">
