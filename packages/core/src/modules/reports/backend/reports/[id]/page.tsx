@@ -12,9 +12,17 @@ import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
-import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical, Download } from 'lucide-react'
+import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical, Download, Settings, Pencil } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { ReportChart } from '../../../widgets/ReportChart'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@open-mercato/ui/primitives/dialog'
 import {
   DndContext,
   DragOverlay,
@@ -28,6 +36,13 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import {
+  SortableContext,
+  useSortable,
+  arrayMove,
+  horizontalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
 type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
@@ -386,6 +401,58 @@ function addFieldToZone(
   return prev
 }
 
+/**
+ * Reorder a chip within its zone, or remove it when `toIndex` is null.
+ * Mirrors `addFieldToZone`'s per-type/per-zone dispatch.
+ *
+ * `fromIndex` is the chip's current index inside the zone. `toIndex` may
+ * be the destination index for a reorder, or null to remove. For measure
+ * zones the index addresses `definition.measures`; for everything else it
+ * addresses the relevant string-array zone.
+ */
+function moveChipInZone(
+  prev: Definition,
+  zoneId: string,
+  fromIndex: number,
+  toIndex: number | null,
+): Definition {
+  const reorderStrings = (list: string[]): string[] => {
+    if (toIndex === null) return list.filter((_, i) => i !== fromIndex)
+    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return list
+    return arrayMove(list, fromIndex, toIndex)
+  }
+  const reorderMeasures = (list: MeasureExpr[]): MeasureExpr[] => {
+    if (toIndex === null) return list.filter((_, i) => i !== fromIndex)
+    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return list
+    return arrayMove(list, fromIndex, toIndex)
+  }
+
+  if (prev.type === 'flat_list') {
+    if (zoneId === 'fields') return { ...prev, fields: reorderStrings(prev.fields) }
+    return prev
+  }
+  if (prev.type === 'grouped') {
+    if (zoneId === 'fields') return { ...prev, fields: reorderStrings(prev.fields) }
+    if (zoneId === 'groupBy') return { ...prev, groupBy: reorderStrings(prev.groupBy) }
+    if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
+    return prev
+  }
+  if (prev.type === 'pivot') {
+    if (zoneId === 'rows') return { ...prev, rows: reorderStrings(prev.rows) }
+    if (zoneId === 'cols') return { ...prev, cols: reorderStrings(prev.cols) }
+    if (zoneId === 'value' && toIndex === null) return { ...prev, value: { field: '', aggregation: 'count' } }
+    return prev
+  }
+  if (prev.type === 'chart') {
+    if (zoneId === 'groupBy') return { ...prev, groupBy: reorderStrings(prev.groupBy) }
+    if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
+    return prev
+  }
+  // summary
+  if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
+  return prev
+}
+
 export default function ReportBuilderPage({ params }: { params?: { id?: string } }) {
   const router = useRouter()
   const t = useT()
@@ -408,6 +475,8 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   const [isRunning, setIsRunning] = React.useState(false)
   const [isDirty, setIsDirty] = React.useState(false)
   const [runResult, setRunResult] = React.useState<ReportRunResponse | null>(null)
+  const [viewMode, setViewMode] = React.useState<'edit' | 'run'>('edit')
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
 
   // Load effect — depends only on reportId. We deliberately do NOT gate
   // `setIsLoading(false)` on a cancelled flag any more: an earlier bullet
@@ -539,11 +608,51 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   const [activeDragFieldKey, setActiveDragFieldKey] = React.useState<string | null>(null)
   const activeDragField = activeDragFieldKey ? fieldByKey.get(activeDragFieldKey) ?? null : null
 
+  /**
+   * Drag overlay label resolution: chips show the dataset field they bind to
+   * (for measure chips, that's `measure.field`). Sidebar drags reuse the
+   * field key directly. Both routes feed `activeDragFieldKey` so the
+   * `<DragOverlay>` renders the same chip everywhere.
+   */
+  const resolveChipFieldKey = React.useCallback((zoneId: string, chipIdx: number): string | null => {
+    const idx = Number.isFinite(chipIdx) ? chipIdx : -1
+    if (idx < 0) return null
+    if (definition.type === 'flat_list' && zoneId === 'fields') return definition.fields[idx] ?? null
+    if (definition.type === 'grouped') {
+      if (zoneId === 'fields') return definition.fields[idx] ?? null
+      if (zoneId === 'groupBy') return definition.groupBy[idx] ?? null
+      if (zoneId === 'measures') return definition.measures[idx]?.field ?? null
+    }
+    if (definition.type === 'pivot') {
+      if (zoneId === 'rows') return definition.rows[idx] ?? null
+      if (zoneId === 'cols') return definition.cols[idx] ?? null
+    }
+    if (definition.type === 'chart') {
+      if (zoneId === 'groupBy') return definition.groupBy[idx] ?? null
+      if (zoneId === 'measures') return definition.measures[idx]?.field ?? null
+    }
+    if (definition.type === 'summary' && zoneId === 'measures') return definition.measures[idx]?.field ?? null
+    return null
+  }, [definition])
+
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     const id = String(event.active.id)
-    if (id.startsWith('field:')) setActiveDragFieldKey(id.slice('field:'.length))
-    else setActiveDragFieldKey(null)
-  }, [])
+    if (id.startsWith('field:')) {
+      setActiveDragFieldKey(id.slice('field:'.length))
+      return
+    }
+    if (id.startsWith('chip:')) {
+      // chip:<zoneId>:<index>
+      const rest = id.slice('chip:'.length)
+      const sep = rest.lastIndexOf(':')
+      if (sep < 0) { setActiveDragFieldKey(null); return }
+      const zoneId = rest.slice(0, sep)
+      const idx = Number(rest.slice(sep + 1))
+      setActiveDragFieldKey(resolveChipFieldKey(zoneId, idx))
+      return
+    }
+    setActiveDragFieldKey(null)
+  }, [resolveChipFieldKey])
 
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
     setActiveDragFieldKey(null)
@@ -552,14 +661,44 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     if (!over) return
     const aid = String(active.id)
     const oid = String(over.id)
+
+    // sidebar field → zone (add)
     if (aid.startsWith('field:') && oid.startsWith('zone:')) {
       const fieldKey = aid.slice('field:'.length)
       const zoneId = oid.slice('zone:'.length)
-      setDefinition((prev) => {
-        const next = addFieldToZone(prev, zoneId, fieldKey, fieldByKey)
-        return next
-      })
+      setDefinition((prev) => addFieldToZone(prev, zoneId, fieldKey, fieldByKey))
       markDirty()
+      return
+    }
+
+    if (aid.startsWith('chip:')) {
+      // chip:<zoneId>:<index>
+      const rest = aid.slice('chip:'.length)
+      const sep = rest.lastIndexOf(':')
+      if (sep < 0) return
+      const zoneId = rest.slice(0, sep)
+      const fromIndex = Number(rest.slice(sep + 1))
+      if (!Number.isFinite(fromIndex)) return
+
+      // chip dropped on the sidebar remove-zone → delete from source
+      if (oid === 'zone:__remove__') {
+        setDefinition((prev) => moveChipInZone(prev, zoneId, fromIndex, null))
+        markDirty()
+        return
+      }
+
+      // chip reorder within the same zone
+      if (oid.startsWith('chip:')) {
+        const oRest = oid.slice('chip:'.length)
+        const oSep = oRest.lastIndexOf(':')
+        if (oSep < 0) return
+        const oZone = oRest.slice(0, oSep)
+        const toIndex = Number(oRest.slice(oSep + 1))
+        if (oZone !== zoneId || !Number.isFinite(toIndex) || fromIndex === toIndex) return
+        setDefinition((prev) => moveChipInZone(prev, zoneId, fromIndex, toIndex))
+        markDirty()
+        return
+      }
     }
   }, [canEdit, fieldByKey, markDirty])
 
@@ -621,6 +760,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     }
     setIsRunning(true)
     setRunResult(null)
+    setViewMode('run')
     try {
       const result = await readApiResultOrThrow<ReportRunResponse>(
         `/api/reports/reports/${encodeURIComponent(report.id)}/run`,
@@ -638,6 +778,10 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
       setIsRunning(false)
     }
   }, [confirm, isDirty, report, t])
+
+  const handleEditAgain = React.useCallback(() => {
+    setViewMode('edit')
+  }, [])
 
   const handleDelete = React.useCallback(async () => {
     if (!report || !canEdit) return
@@ -699,81 +843,89 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
             isSaving={isSaving}
             isRunning={isRunning}
             isDirty={isDirty}
+            viewMode={viewMode}
             onRun={handleRun}
             onSave={handleSave}
             onDelete={handleDelete}
+            onEditAgain={handleEditAgain}
+            onOpenSettings={() => setSettingsOpen(true)}
             t={t}
           />
 
-          <DndContext
-            sensors={dndSensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            onDragCancel={handleDragCancel}
-          >
-            <div className="grid gap-4 lg:grid-cols-3">
-              <div className="flex flex-col gap-4 lg:col-span-1">
-                <MetadataCard
-                  name={name}
-                  description={description}
-                  datasetId={report.datasetId}
-                  canEdit={canEdit}
-                  isSaving={isSaving}
-                  onNameChange={(value) => { setName(value); markDirty() }}
-                  onDescriptionChange={(value) => { setDescription(value); markDirty() }}
-                  t={t}
-                />
-                <FieldList
-                  fields={datasetFields}
-                  hiddenPaths={dataset?.hiddenFieldPaths ?? []}
-                  canEdit={canEdit}
-                  t={t}
-                />
-              </div>
-
-              <div className="flex flex-col gap-4 lg:col-span-2">
-                <TypeSwitcher
-                  value={definition.type}
-                  onChange={handleTypeChange}
-                  canEdit={canEdit}
-                  t={t}
-                />
-                <PerTypeCanvas
-                  definition={definition}
-                  fields={datasetFields}
-                  canEdit={canEdit}
-                  onChange={(next) => { setDefinition(next); markDirty() }}
-                  t={t}
-                />
-                <ParametersSection
-                  parameters={parameters}
-                  canEdit={canEdit}
-                  onChange={(next) => { setParameters(next); markDirty() }}
-                  t={t}
-                />
-              </div>
-            </div>
-            <DragOverlay dropAnimation={null}>
-              {activeDragField ? (
-                <div className="pointer-events-none flex max-w-xs items-center gap-2 rounded-md border border-primary bg-popover px-3 py-2 text-sm shadow-lg">
-                  <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium">{t(activeDragField.labelKey, activeDragField.key)}</span>
-                    <span className="truncate font-mono text-xs text-muted-foreground">{activeDragField.key}</span>
-                  </div>
+          {viewMode === 'edit' ? (
+            <DndContext
+              sensors={dndSensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <div className="flex flex-col gap-4 lg:flex-row">
+                <aside className="w-full shrink-0 lg:w-60">
+                  <FieldList
+                    fields={datasetFields}
+                    hiddenPaths={dataset?.hiddenFieldPaths ?? []}
+                    canEdit={canEdit}
+                    t={t}
+                  />
+                </aside>
+                <div className="flex min-w-0 flex-1 flex-col gap-4">
+                  <TypeSwitcher
+                    value={definition.type}
+                    onChange={handleTypeChange}
+                    canEdit={canEdit}
+                    t={t}
+                  />
+                  <PerTypeCanvas
+                    definition={definition}
+                    fields={datasetFields}
+                    canEdit={canEdit}
+                    onChange={(next) => { setDefinition(next); markDirty() }}
+                    t={t}
+                  />
+                  <ParametersSection
+                    parameters={parameters}
+                    canEdit={canEdit}
+                    onChange={(next) => { setParameters(next); markDirty() }}
+                    t={t}
+                  />
                 </div>
-              ) : null}
-            </DragOverlay>
-          </DndContext>
+              </div>
+              <DragOverlay dropAnimation={null}>
+                {activeDragField ? (
+                  <div className="pointer-events-none flex max-w-xs items-center gap-2 rounded-md border border-primary bg-popover px-3 py-2 text-sm shadow-lg">
+                    <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate font-medium">{t(activeDragField.labelKey, activeDragField.key)}</span>
+                      <span className="truncate font-mono text-xs text-muted-foreground">{activeDragField.key}</span>
+                    </div>
+                  </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
+          ) : null}
 
           <PreviewSection
             definition={definition}
             runResult={runResult}
             isRunning={isRunning}
+            viewMode={viewMode}
             t={t}
           />
         </div>
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          name={name}
+          description={description}
+          datasetId={report.datasetId}
+          canEdit={canEdit}
+          isSaving={isSaving}
+          onNameChange={(value) => { setName(value); markDirty() }}
+          onDescriptionChange={(value) => { setDescription(value); markDirty() }}
+          onDelete={canEdit ? () => { setSettingsOpen(false); handleDelete() } : undefined}
+          t={t}
+        />
         {ConfirmDialogElement}
       </PageBody>
     </Page>
@@ -788,9 +940,12 @@ type BuilderHeaderProps = {
   isSaving: boolean
   isRunning: boolean
   isDirty: boolean
+  viewMode: 'edit' | 'run'
   onRun: () => void
   onSave: () => void
   onDelete: () => void
+  onEditAgain: () => void
+  onOpenSettings: () => void
   t: ReturnType<typeof useT>
 }
 
@@ -807,11 +962,15 @@ function BuilderHeader({
   isSaving,
   isRunning,
   isDirty,
+  viewMode,
   onRun,
   onSave,
   onDelete,
+  onEditAgain,
+  onOpenSettings,
   t,
 }: BuilderHeaderProps) {
+  void onDelete
   const [exportOpen, setExportOpen] = React.useState(false)
   const exportRef = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
@@ -843,10 +1002,18 @@ function BuilderHeader({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" onClick={onRun} disabled={isRunning}>
-          <Play className="size-4" aria-hidden />
-          <span>{isRunning ? t('reports.detail.actions.running', 'Running…') : t('reports.detail.actions.run', 'Run')}</span>
-        </Button>
+        {viewMode === 'run' ? (
+          <Button type="button" variant="outline" onClick={onEditAgain}>
+            <Pencil className="size-4" aria-hidden />
+            <span>{t('reports.detail.actions.edit', 'Edit')}</span>
+          </Button>
+        ) : null}
+        {viewMode === 'edit' ? (
+          <Button type="button" variant="outline" onClick={onRun} disabled={isRunning}>
+            <Play className="size-4" aria-hidden />
+            <span>{isRunning ? t('reports.detail.actions.running', 'Running…') : t('reports.detail.actions.run', 'Run')}</span>
+          </Button>
+        ) : null}
         <div className="relative" ref={exportRef}>
           <Button
             type="button"
@@ -878,16 +1045,16 @@ function BuilderHeader({
             </div>
           ) : null}
         </div>
-        {canEdit ? (
+        {canEdit && viewMode === 'edit' ? (
           <Button type="button" onClick={onSave} disabled={isSaving || !isDirty}>
             <Save className="size-4" aria-hidden />
             <span>{isSaving ? t('reports.detail.actions.saving', 'Saving…') : t('reports.detail.actions.save', 'Save')}</span>
           </Button>
         ) : null}
-        {canEdit ? (
-          <Button type="button" variant="destructive" onClick={onDelete}>
-            <Trash2 className="size-4" aria-hidden />
-            <span>{t('reports.detail.actions.delete', 'Delete')}</span>
+        {canEdit && viewMode === 'edit' ? (
+          <Button type="button" variant="outline" onClick={onOpenSettings} aria-label={t('reports.detail.actions.settings', 'Settings')}>
+            <Settings className="size-4" aria-hidden />
+            <span>{t('reports.detail.actions.settings', 'Settings')}</span>
           </Button>
         ) : null}
       </div>
@@ -895,9 +1062,11 @@ function BuilderHeader({
   )
 }
 
-// ---------- Metadata ----------
+// ---------- Settings dialog ----------
 
-type MetadataCardProps = {
+type SettingsDialogProps = {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   name: string
   description: string
   datasetId: string
@@ -905,10 +1074,13 @@ type MetadataCardProps = {
   isSaving: boolean
   onNameChange: (value: string) => void
   onDescriptionChange: (value: string) => void
+  onDelete?: () => void
   t: ReturnType<typeof useT>
 }
 
-function MetadataCard({
+function SettingsDialog({
+  open,
+  onOpenChange,
   name,
   description,
   datasetId,
@@ -916,33 +1088,54 @@ function MetadataCard({
   isSaving,
   onNameChange,
   onDescriptionChange,
+  onDelete,
   t,
-}: MetadataCardProps) {
+}: SettingsDialogProps) {
   return (
-    <section className="space-y-3 rounded-md border border-border bg-card p-4">
-      <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.metadata', 'Metadata')}</h2>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.name', 'Name')}</span>
-        <Input
-          value={name}
-          onChange={(e) => onNameChange(e.target.value)}
-          disabled={!canEdit || isSaving}
-        />
-      </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.description', 'Description')}</span>
-        <Textarea
-          value={description}
-          onChange={(e) => onDescriptionChange(e.target.value)}
-          disabled={!canEdit || isSaving}
-          rows={3}
-        />
-      </label>
-      <div className="space-y-1">
-        <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.dataset', 'Dataset')}</span>
-        <p className="font-mono text-sm">{datasetId}</p>
-      </div>
-    </section>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('reports.detail.sections.metadata', 'Report settings')}</DialogTitle>
+          <DialogDescription>
+            {t('reports.detail.settings.hint', 'Name and description of this report. The dataset is fixed at creation time.')}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.name', 'Name')}</span>
+            <Input
+              value={name}
+              onChange={(e) => onNameChange(e.target.value)}
+              disabled={!canEdit || isSaving}
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.description', 'Description')}</span>
+            <Textarea
+              value={description}
+              onChange={(e) => onDescriptionChange(e.target.value)}
+              disabled={!canEdit || isSaving}
+              rows={3}
+            />
+          </label>
+          <div className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.fields.dataset', 'Dataset')}</span>
+            <p className="font-mono text-sm">{datasetId}</p>
+          </div>
+        </div>
+        <DialogFooter className="sm:justify-between">
+          {onDelete ? (
+            <Button type="button" variant="destructive" onClick={onDelete}>
+              <Trash2 className="size-4" aria-hidden />
+              <span>{t('reports.detail.actions.delete', 'Delete report')}</span>
+            </Button>
+          ) : <span />}
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            {t('reports.detail.actions.close', 'Close')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -956,18 +1149,29 @@ type FieldListProps = {
 }
 
 function FieldList({ fields, hiddenPaths, canEdit, t }: FieldListProps) {
+  // The sidebar doubles as a remove-target: dragging a chip back onto it
+  // removes that chip from its source zone (see handleDragEnd dispatch).
+  const removeDrop = useDroppable({ id: 'zone:__remove__', disabled: !canEdit })
   return (
-    <section className="space-y-2 rounded-md border border-border bg-card p-4">
+    <section
+      ref={removeDrop.setNodeRef}
+      className={cn(
+        'space-y-2 rounded-md border border-border bg-card p-3 transition-colors',
+        removeDrop.isOver ? 'border-status-danger-border bg-status-danger-bg/40' : '',
+      )}
+    >
       <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.fields', 'Dataset fields')}</h2>
       {canEdit && fields.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {t('reports.detail.fields.dragHint', 'Drag a field into a zone, or use the "Add field" buttons.')}
+          {removeDrop.isOver
+            ? t('reports.detail.fields.dropToRemove', 'Drop here to remove from the zone.')
+            : t('reports.detail.fields.dragHint', 'Drag a field into a zone. Drag a chip back here to remove.')}
         </p>
       ) : null}
       {fields.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('reports.detail.fields.empty', 'No fields available for this dataset.')}</p>
       ) : (
-        <ul className="space-y-1 max-h-96 overflow-y-auto">
+        <ul className="space-y-1 max-h-[60vh] overflow-y-auto pr-1">
           {fields.map((field) => (
             <DraggableFieldRow key={field.key} field={field} canEdit={canEdit} t={t} />
           ))}
@@ -1263,11 +1467,39 @@ type ChipProps = {
   onRemove?: () => void
   disabled?: boolean
   children?: React.ReactNode
+  /**
+   * When provided, the chip becomes draggable + sortable. Format:
+   * `chip:<zoneId>:<index>`. The page-level DnD handler reads this id
+   * to dispatch reorder (chip → chip) and remove (chip → sidebar) events.
+   */
+  dragId?: string
 }
 
-function Chip({ label, sublabel, onRemove, disabled, children }: ChipProps) {
+function Chip({ label, sublabel, onRemove, disabled, children, dragId }: ChipProps) {
+  const sortable = useSortable({ id: dragId ?? '__chip_inert__', disabled: !dragId || disabled })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = sortable
+  const handleStyle: React.CSSProperties | undefined = dragId
+    ? { transform: CSS.Transform.toString(transform), transition }
+    : undefined
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1 text-sm">
+    <div
+      ref={dragId ? setNodeRef : undefined}
+      style={handleStyle}
+      className={cn(
+        'flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1 text-sm',
+        isDragging ? 'opacity-50' : '',
+      )}
+    >
+      {dragId ? (
+        <span
+          className={cn('flex shrink-0 items-center text-muted-foreground', disabled ? 'opacity-50' : 'cursor-grab active:cursor-grabbing')}
+          {...(disabled ? {} : attributes)}
+          {...(disabled ? {} : listeners)}
+          aria-label="Drag to reorder"
+        >
+          <GripVertical className="size-3.5" aria-hidden />
+        </span>
+      ) : null}
       <div className="flex flex-col">
         <span className="font-medium">{label}</span>
         {sublabel ? <span className="font-mono text-xs text-muted-foreground">{sublabel}</span> : null}
@@ -1323,28 +1555,34 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
         isEmpty={definition.fields.length === 0}
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {definition.fields.map((fieldKey) => {
-            const field = fieldByKey.get(fieldKey)
-            return (
-              <Chip
-                key={fieldKey}
-                label={field ? t(field.labelKey, field.key) : fieldKey}
-                sublabel={fieldKey}
-                disabled={!canEdit}
-                onRemove={() => setFields(definition.fields.filter((f) => f !== fieldKey))}
-              />
-            )
-          })}
-          <FieldPicker
-            fields={fields}
-            selected={selectedFields}
-            disabled={!canEdit}
-            buttonLabel={t('reports.detail.actions.addField', 'Add field')}
-            onPick={(k) => setFields([...definition.fields, k])}
-            t={t}
-          />
-        </div>
+        <SortableContext
+          items={definition.fields.map((_, i) => `chip:fields:${i}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {definition.fields.map((fieldKey, idx) => {
+              const field = fieldByKey.get(fieldKey)
+              return (
+                <Chip
+                  key={fieldKey}
+                  dragId={canEdit ? `chip:fields:${idx}` : undefined}
+                  label={field ? t(field.labelKey, field.key) : fieldKey}
+                  sublabel={fieldKey}
+                  disabled={!canEdit}
+                  onRemove={() => setFields(definition.fields.filter((f) => f !== fieldKey))}
+                />
+              )
+            })}
+            <FieldPicker
+              fields={fields}
+              selected={selectedFields}
+              disabled={!canEdit}
+              buttonLabel={t('reports.detail.actions.addField', 'Add field')}
+              onPick={(k) => setFields([...definition.fields, k])}
+              t={t}
+            />
+          </div>
+        </SortableContext>
       </Zone>
 
       <Zone
@@ -1433,28 +1671,34 @@ function GroupedCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }:
         isEmpty={definition.groupBy.length === 0}
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {definition.groupBy.map((key) => {
-            const field = fieldByKey.get(key)
-            return (
-              <Chip
-                key={key}
-                label={field ? t(field.labelKey, field.key) : key}
-                sublabel={key}
-                disabled={!canEdit}
-                onRemove={() => setGroupBy(definition.groupBy.filter((f) => f !== key))}
-              />
-            )
-          })}
-          <FieldPicker
-            fields={categoricalFields}
-            selected={groupedSet}
-            disabled={!canEdit}
-            buttonLabel={t('reports.detail.actions.addField', 'Add field')}
-            onPick={(k) => setGroupBy([...definition.groupBy, k])}
-            t={t}
-          />
-        </div>
+        <SortableContext
+          items={definition.groupBy.map((_, i) => `chip:groupBy:${i}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {definition.groupBy.map((key, idx) => {
+              const field = fieldByKey.get(key)
+              return (
+                <Chip
+                  key={key}
+                  dragId={canEdit ? `chip:groupBy:${idx}` : undefined}
+                  label={field ? t(field.labelKey, field.key) : key}
+                  sublabel={key}
+                  disabled={!canEdit}
+                  onRemove={() => setGroupBy(definition.groupBy.filter((f) => f !== key))}
+                />
+              )
+            })}
+            <FieldPicker
+              fields={categoricalFields}
+              selected={groupedSet}
+              disabled={!canEdit}
+              buttonLabel={t('reports.detail.actions.addField', 'Add field')}
+              onPick={(k) => setGroupBy([...definition.groupBy, k])}
+              t={t}
+            />
+          </div>
+        </SortableContext>
       </Zone>
 
       <MeasureZone
@@ -1622,28 +1866,34 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
         isEmpty={definition.rows.length === 0}
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {definition.rows.map((key) => {
-            const field = fieldByKey.get(key)
-            return (
-              <Chip
-                key={key}
-                label={field ? t(field.labelKey, field.key) : key}
-                sublabel={key}
-                disabled={!canEdit}
-                onRemove={() => onChange({ ...definition, rows: definition.rows.filter((f) => f !== key) })}
-              />
-            )
-          })}
-          <FieldPicker
-            fields={rowsExcludingCols}
-            selected={rowsSet}
-            disabled={!canEdit}
-            buttonLabel={t('reports.detail.actions.addRow', 'Add row')}
-            onPick={(k) => onChange({ ...definition, rows: [...definition.rows, k] })}
-            t={t}
-          />
-        </div>
+        <SortableContext
+          items={definition.rows.map((_, i) => `chip:rows:${i}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {definition.rows.map((key, idx) => {
+              const field = fieldByKey.get(key)
+              return (
+                <Chip
+                  key={key}
+                  dragId={canEdit ? `chip:rows:${idx}` : undefined}
+                  label={field ? t(field.labelKey, field.key) : key}
+                  sublabel={key}
+                  disabled={!canEdit}
+                  onRemove={() => onChange({ ...definition, rows: definition.rows.filter((f) => f !== key) })}
+                />
+              )
+            })}
+            <FieldPicker
+              fields={rowsExcludingCols}
+              selected={rowsSet}
+              disabled={!canEdit}
+              buttonLabel={t('reports.detail.actions.addRow', 'Add row')}
+              onPick={(k) => onChange({ ...definition, rows: [...definition.rows, k] })}
+              t={t}
+            />
+          </div>
+        </SortableContext>
       </Zone>
 
       <Zone
@@ -1653,28 +1903,34 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
         isEmpty={definition.cols.length === 0}
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {definition.cols.map((key) => {
-            const field = fieldByKey.get(key)
-            return (
-              <Chip
-                key={key}
-                label={field ? t(field.labelKey, field.key) : key}
-                sublabel={key}
-                disabled={!canEdit}
-                onRemove={() => onChange({ ...definition, cols: definition.cols.filter((f) => f !== key) })}
-              />
-            )
-          })}
-          <FieldPicker
-            fields={colsExcludingRows}
-            selected={colsSet}
-            disabled={!canEdit}
-            buttonLabel={t('reports.detail.actions.addColumn', 'Add column')}
-            onPick={(k) => onChange({ ...definition, cols: [...definition.cols, k] })}
-            t={t}
-          />
-        </div>
+        <SortableContext
+          items={definition.cols.map((_, i) => `chip:cols:${i}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {definition.cols.map((key, idx) => {
+              const field = fieldByKey.get(key)
+              return (
+                <Chip
+                  key={key}
+                  dragId={canEdit ? `chip:cols:${idx}` : undefined}
+                  label={field ? t(field.labelKey, field.key) : key}
+                  sublabel={key}
+                  disabled={!canEdit}
+                  onRemove={() => onChange({ ...definition, cols: definition.cols.filter((f) => f !== key) })}
+                />
+              )
+            })}
+            <FieldPicker
+              fields={colsExcludingRows}
+              selected={colsSet}
+              disabled={!canEdit}
+              buttonLabel={t('reports.detail.actions.addColumn', 'Add column')}
+              onPick={(k) => onChange({ ...definition, cols: [...definition.cols, k] })}
+              t={t}
+            />
+          </div>
+        </SortableContext>
       </Zone>
 
       <MeasureZone
@@ -1837,28 +2093,34 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
         title={t('reports.detail.zones.groupBy', 'Group by')}
         description={t('reports.detail.zones.chartGroupByHint', 'Optional: explicit groupBy for the underlying execution. Defaults to the X field.')}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          {definition.groupBy.map((key) => {
-            const field = fieldByKey.get(key)
-            return (
-              <Chip
-                key={key}
-                label={field ? t(field.labelKey, field.key) : key}
-                sublabel={key}
-                disabled={!canEdit}
-                onRemove={() => onChange({ ...definition, groupBy: definition.groupBy.filter((f) => f !== key) })}
-              />
-            )
-          })}
-          <FieldPicker
-            fields={categoricalFields}
-            selected={groupBySet}
-            disabled={!canEdit}
-            buttonLabel={t('reports.detail.actions.addField', 'Add field')}
-            onPick={(k) => onChange({ ...definition, groupBy: [...definition.groupBy, k] })}
-            t={t}
-          />
-        </div>
+        <SortableContext
+          items={definition.groupBy.map((_, i) => `chip:groupBy:${i}`)}
+          strategy={horizontalListSortingStrategy}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {definition.groupBy.map((key, idx) => {
+              const field = fieldByKey.get(key)
+              return (
+                <Chip
+                  key={key}
+                  dragId={canEdit ? `chip:groupBy:${idx}` : undefined}
+                  label={field ? t(field.labelKey, field.key) : key}
+                  sublabel={key}
+                  disabled={!canEdit}
+                  onRemove={() => onChange({ ...definition, groupBy: definition.groupBy.filter((f) => f !== key) })}
+                />
+              )
+            })}
+            <FieldPicker
+              fields={categoricalFields}
+              selected={groupBySet}
+              disabled={!canEdit}
+              buttonLabel={t('reports.detail.actions.addField', 'Add field')}
+              onPick={(k) => onChange({ ...definition, groupBy: [...definition.groupBy, k] })}
+              t={t}
+            />
+          </div>
+        </SortableContext>
       </Zone>
 
       <MeasureZone
@@ -2608,19 +2870,30 @@ type PreviewSectionProps = {
   definition: Definition
   runResult: ReportRunResponse | null
   isRunning: boolean
+  viewMode: 'edit' | 'run'
   t: ReturnType<typeof useT>
 }
 
-function PreviewSection({ definition, runResult, isRunning, t }: PreviewSectionProps) {
+function PreviewSection({ definition, runResult, isRunning, viewMode, t }: PreviewSectionProps) {
   const renderedRows = Array.isArray(runResult?.rows) ? runResult!.rows! : []
   const renderedColumns = runResult?.meta?.fields && runResult.meta.fields.length
     ? runResult.meta.fields
     : (renderedRows[0] ? Object.keys(renderedRows[0]) : [])
 
+  // Run mode expands the section to fill the viewport so the result table /
+  // chart is the focal element. Edit mode keeps a smaller minimum height so
+  // the editor above stays in view.
+  const sectionClass = viewMode === 'run'
+    ? 'rounded-md border border-border bg-card p-4 min-h-[70vh]'
+    : 'rounded-md border border-border bg-card p-4 min-h-[40vh]'
+  const headingLabel = viewMode === 'run'
+    ? t('reports.detail.sections.result', 'Result')
+    : t('reports.detail.sections.preview', 'Preview')
+
   if (definition.type === 'chart') {
     return (
-      <section className="rounded-md border border-border bg-card p-4">
-        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.preview', 'Preview')}</h2>
+      <section className={sectionClass}>
+        <h2 className="text-overline text-muted-foreground">{headingLabel}</h2>
         {renderedRows.length === 0 && !isRunning ? (
           <p className="mt-2 text-sm text-muted-foreground">
             {runResult
@@ -2637,9 +2910,9 @@ function PreviewSection({ definition, runResult, isRunning, t }: PreviewSectionP
   }
 
   return (
-    <section className="rounded-md border border-border bg-card p-4">
+    <section className={sectionClass}>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.preview', 'Preview')}</h2>
+        <h2 className="text-overline text-muted-foreground">{headingLabel}</h2>
         <span className="text-xs text-muted-foreground">
           {runResult?.total != null
             ? t('reports.detail.preview.rowCount', '{count} rows').replace('{count}', String(runResult.total))
