@@ -873,7 +873,12 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     return () => clearTimeout(handle)
   }, [viewMode, report, definition, parameters])
 
-  if (isLoading) {
+  // Show the spinner while the load is in flight AND for the brief frame
+  // after `isLoading` flips false but before `report` is populated — without
+  // this guard the "Report not found" panel flashes on every refresh because
+  // `report` is `null` (initial state) and `loadError` is also `null` (the
+  // load effect resets it from a useEffect, one frame after the render).
+  if (isLoading || (!loadError && !report)) {
     return (
       <Page>
         <PageBody>
