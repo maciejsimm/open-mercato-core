@@ -662,11 +662,24 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     const aid = String(active.id)
     const oid = String(over.id)
 
-    // sidebar field → zone (add)
-    if (aid.startsWith('field:') && oid.startsWith('zone:')) {
+    // sidebar field → zone (add). Collision detection often resolves to a
+    // chip droppable inside the zone before the zone wrapper itself, so we
+    // also accept chip:<zoneId>:<idx> as the target and resolve the zone
+    // from it.
+    if (aid.startsWith('field:')) {
       const fieldKey = aid.slice('field:'.length)
-      const zoneId = oid.slice('zone:'.length)
-      setDefinition((prev) => addFieldToZone(prev, zoneId, fieldKey, fieldByKey))
+      let targetZone: string | null = null
+      if (oid.startsWith('zone:')) {
+        targetZone = oid.slice('zone:'.length)
+      } else if (oid.startsWith('chip:')) {
+        const rest = oid.slice('chip:'.length)
+        const sep = rest.lastIndexOf(':')
+        if (sep >= 0) targetZone = rest.slice(0, sep)
+      }
+      // The sidebar's remove-target is a sink only for chips, not for sidebar
+      // fields — dragging from the sidebar back onto the sidebar is a no-op.
+      if (!targetZone || targetZone === '__remove__') return
+      setDefinition((prev) => addFieldToZone(prev, targetZone!, fieldKey, fieldByKey))
       markDirty()
       return
     }
