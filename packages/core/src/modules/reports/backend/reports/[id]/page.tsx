@@ -947,15 +947,24 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                     t={t}
                   />
                 </aside>
-                <EditorTabsCard
-                  definition={definition}
-                  parameters={parameters}
-                  fields={datasetFields}
-                  canEdit={canEdit}
-                  onDefinitionChange={(next) => { setDefinition(next); markDirty() }}
-                  onParametersChange={(next) => { setParameters(next); markDirty() }}
-                  t={t}
-                />
+                <div className="flex min-w-0 flex-1 flex-col gap-4">
+                  <EditorTabsCard
+                    definition={definition}
+                    parameters={parameters}
+                    fields={datasetFields}
+                    canEdit={canEdit}
+                    onDefinitionChange={(next) => { setDefinition(next); markDirty() }}
+                    onParametersChange={(next) => { setParameters(next); markDirty() }}
+                    t={t}
+                  />
+                  <PreviewSection
+                    definition={definition}
+                    runResult={previewResult}
+                    isRunning={isPreviewing}
+                    viewMode="edit"
+                    t={t}
+                  />
+                </div>
               </div>
               <DragOverlay dropAnimation={null}>
                 {activeDragField ? (
@@ -969,15 +978,15 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                 ) : null}
               </DragOverlay>
             </DndContext>
-          ) : null}
-
-          <PreviewSection
-            definition={definition}
-            runResult={viewMode === 'run' ? runResult : previewResult}
-            isRunning={viewMode === 'run' ? isRunning : isPreviewing}
-            viewMode={viewMode}
-            t={t}
-          />
+          ) : (
+            <PreviewSection
+              definition={definition}
+              runResult={runResult}
+              isRunning={isRunning}
+              viewMode="run"
+              t={t}
+            />
+          )}
         </div>
         <SettingsDialog
           open={settingsOpen}
