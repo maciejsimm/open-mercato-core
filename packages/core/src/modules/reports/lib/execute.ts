@@ -257,14 +257,54 @@ function buildAggregationQueryOptions(
   return opts
 }
 
-function sortRows(rows: Row[], sort: DslSort[] | undefined): Row[] {
+/**
+ * Build an enum-aware comparator map for the supplied dataset. Each entry
+ * maps a field key → enum option index lookup, so a value declared first
+ * in the dataset's `options` array sorts before later ones (default enum
+ * order). Fields that aren't enums, or enums without inline `options`,
+ * are absent from the map and fall back to `compareValues`.
+ */
+function buildEnumOrderMap(dataset: Dataset): Map<string, (v: unknown) => number> {
+  const map = new Map<string, (v: unknown) => number>()
+  for (const f of dataset.fields) {
+    if (f.kind !== 'enum') continue
+    const enumField = f as { options?: Array<string | number | { value: string | number }> }
+    const opts = Array.isArray(enumField.options) ? enumField.options : []
+    if (opts.length === 0) continue
+    const order = new Map<string, number>()
+    opts.forEach((opt, i) => {
+      const v = typeof opt === 'object' && opt !== null ? String((opt as { value: unknown }).value) : String(opt)
+      order.set(v, i)
+    })
+    map.set(f.key, (value) => {
+      if (value == null) return Number.MAX_SAFE_INTEGER
+      const idx = order.get(String(value))
+      return idx == null ? Number.MAX_SAFE_INTEGER : idx
+    })
+  }
+  return map
+}
+
+function sortRows(
+  rows: Row[],
+  sort: DslSort[] | undefined,
+  enumOrder?: Map<string, (v: unknown) => number>,
+): Row[] {
   if (!sort?.length) return rows
   const sorted = [...rows]
   sorted.sort((a, b) => {
     for (const s of sort) {
       const av = readFieldValue(a, s.field)
       const bv = readFieldValue(b, s.field)
-      const cmp = compareValues(av, bv)
+      const enumIdx = enumOrder?.get(s.field)
+      let cmp: number
+      if (enumIdx) {
+        const ai = enumIdx(av)
+        const bi = enumIdx(bv)
+        cmp = ai === bi ? 0 : ai < bi ? -1 : 1
+      } else {
+        cmp = compareValues(av, bv)
+      }
       if (cmp !== 0) return s.dir === 'desc' ? -cmp : cmp
     }
     return 0
@@ -335,6 +375,7 @@ export async function executeReport(
     let outFields: string[] = []
     let limit: number | undefined
 
+    const enumOrder = buildEnumOrderMap(input.dataset)
     if (input.definition.type === 'grouped') {
       const def = input.definition
       await profiler.measure('aggregate.grouped', () => {
@@ -343,7 +384,16 @@ export async function executeReport(
           groupBy: def.groupBy,
           measures: def.measures,
         })
-        rows = sortRows(rows, def.sort)
+        // Default to enum-order sort when the report doesn't specify one
+        // and the first groupBy key is an enum with declared options. This
+        // is what users typically expect (status: open → won → lost), not
+        // alphabetical (lost → open → won).
+        const effectiveSort = def.sort?.length
+          ? def.sort
+          : (def.groupBy[0] && enumOrder.has(def.groupBy[0])
+              ? [{ field: def.groupBy[0], dir: 'asc' as const }]
+              : undefined)
+        rows = sortRows(rows, effectiveSort, enumOrder)
         limit = def.limit
         outFields = [
           ...def.groupBy,

@@ -35,6 +35,7 @@ import {
   useDroppable,
   closestCenter,
   type DragEndEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
 import {
@@ -127,6 +128,8 @@ type ReportDetail = {
   updatedAt: string | null
 }
 
+type EnumOption = string | number | { value: string | number; labelKey?: string }
+
 type DatasetFieldRow = {
   key: string
   labelKey: string
@@ -134,6 +137,9 @@ type DatasetFieldRow = {
   sortable?: boolean
   filterable?: boolean
   aggregations?: Aggregation[]
+  /** Present for enum-kind fields when declared inline (not via dictionary). */
+  options?: EnumOption[]
+  dictionary?: string
 }
 
 type ParameterKind = 'string' | 'number' | 'boolean' | 'date' | 'date_range' | 'fk' | 'enum'
@@ -610,6 +616,12 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   const [activeDragFieldKey, setActiveDragFieldKey] = React.useState<string | null>(null)
   const activeDragField = activeDragFieldKey ? fieldByKey.get(activeDragFieldKey) ?? null : null
+  // `activeOverZone` tracks the zone the user is currently hovering during a
+  // drag. closestCenter picks the chip droppable inside a zone before the
+  // zone wrapper itself, so the wrapper's own `isOver` never fires. We bus
+  // the resolved zoneId down via context so `<Zone>` can highlight even
+  // when the chip droppable is the actual collision target.
+  const [activeOverZone, setActiveOverZone] = React.useState<string | null>(null)
 
   /**
    * Drag overlay label resolution: chips show the dataset field they bind to
@@ -659,6 +671,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
     setActiveDragFieldKey(null)
+    setActiveOverZone(null)
     if (!canEdit) return
     const { active, over } = event
     if (!over) return
@@ -720,6 +733,23 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   const handleDragCancel = React.useCallback(() => {
     setActiveDragFieldKey(null)
+    setActiveOverZone(null)
+  }, [])
+
+  const handleDragOver = React.useCallback((event: DragOverEvent) => {
+    const over = event.over
+    if (!over) { setActiveOverZone(null); return }
+    const oid = String(over.id)
+    if (oid.startsWith('zone:')) {
+      setActiveOverZone(oid.slice('zone:'.length))
+      return
+    }
+    if (oid.startsWith('chip:')) {
+      const rest = oid.slice('chip:'.length)
+      const sep = rest.lastIndexOf(':')
+      if (sep >= 0) { setActiveOverZone(rest.slice(0, sep)); return }
+    }
+    setActiveOverZone(null)
   }, [])
 
   const handleTypeChange = React.useCallback((next: ReportType) => {
@@ -932,9 +962,11 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
               sensors={dndSensors}
               collisionDetection={closestCenter}
               onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
+            <ActiveOverZoneContext.Provider value={activeOverZone}>
               <div className="flex flex-col gap-4 lg:flex-row">
                 <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-60">
                   <div className="rounded-md border border-border bg-card p-3">
@@ -982,6 +1014,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                   </div>
                 ) : null}
               </DragOverlay>
+            </ActiveOverZoneContext.Provider>
             </DndContext>
           ) : (
             <PreviewSection
@@ -1446,12 +1479,12 @@ function EditorTabsCard({
 
   return (
     <div className="flex min-w-0 flex-1 flex-col rounded-md border border-border bg-card">
-      <Tabs defaultValue="fields" className="flex flex-1 flex-col">
+      <Tabs defaultValue="fields" className="flex flex-col">
         <div className="border-b border-border px-3 py-2">
           <TabsList>
             <TabsTrigger value="fields">{t('reports.detail.tabs.fields', 'Fields')}</TabsTrigger>
             <TabsTrigger value="filters">
-              {t('reports.detail.tabs.filters', 'Filters')}
+              {t('reports.detail.tabs.filtersAndSorting', 'Filters & Sorting')}
               {filterCount > 0 ? (
                 <span className="ml-2 rounded-full bg-muted px-1.5 text-xs font-medium">{filterCount}</span>
               ) : null}
@@ -1464,7 +1497,7 @@ function EditorTabsCard({
             </TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="fields" className="flex-1 p-3">
+        <TabsContent value="fields" className="p-3">
           <PerTypeCanvas
             definition={definition}
             fields={fields}
@@ -1473,7 +1506,7 @@ function EditorTabsCard({
             t={t}
           />
         </TabsContent>
-        <TabsContent value="filters" className="flex-1 p-3">
+        <TabsContent value="filters" className="space-y-3 p-3">
           <FiltersSection
             filters={definition.filters as FilterShape[]}
             fields={filterableFields}
@@ -1482,8 +1515,15 @@ function EditorTabsCard({
             onChange={(nextFilters) => onDefinitionChange({ ...definition, filters: nextFilters } as Definition)}
             t={t}
           />
+          <SortLimitRow
+            definition={definition}
+            fields={fields}
+            canEdit={canEdit}
+            onChange={onDefinitionChange}
+            t={t}
+          />
         </TabsContent>
-        <TabsContent value="parameters" className="flex-1 p-3">
+        <TabsContent value="parameters" className="p-3">
           <ParametersSection
             parameters={parameters}
             canEdit={canEdit}
@@ -1508,14 +1548,21 @@ type ZoneProps = {
   isEmpty?: boolean
 }
 
+const ActiveOverZoneContext = React.createContext<string | null>(null)
+
 function Zone({ zoneId, title, description, children, emptyLabel, isEmpty }: ZoneProps) {
   const drop = useDroppable({ id: zoneId ? `zone:${zoneId}` : `zone:__inert__`, disabled: !zoneId })
+  // Page-level drag tracker fills this when the active drag's resolved
+  // target zone is *this* zone — covers the closestCenter case where the
+  // chip droppable wins collision detection over the zone wrapper.
+  const activeOverZone = React.useContext(ActiveOverZoneContext)
+  const isHovered = drop.isOver || (zoneId != null && activeOverZone === zoneId)
   return (
     <section
       ref={drop.setNodeRef}
       className={cn(
         'space-y-2 rounded-md border border-dashed border-border bg-card/60 p-3 transition-colors',
-        drop.isOver ? 'border-primary bg-primary/5' : '',
+        isHovered ? 'border-primary bg-primary/5' : '',
       )}
       data-zone-id={zoneId}
     >
@@ -1678,14 +1725,8 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
     return map
   }, [fields])
   const selectedFields = React.useMemo(() => new Set(definition.fields), [definition.fields])
-  const sortableFields = React.useMemo(() => fields.filter((f) => f.sortable !== false), [fields])
 
   const setFields = (next: string[]) => onChange({ ...definition, fields: next })
-  const setSort = (next: SortShape[]) => onChange({ ...definition, sort: next })
-  const setLimit = (next?: number) => onChange({ ...definition, limit: next })
-
-  const sortField = definition.sort[0]?.field ?? ''
-  const sortDir = (definition.sort[0]?.dir ?? 'asc') as 'asc' | 'desc'
 
   return (
     <div className="space-y-3">
@@ -1726,60 +1767,90 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
         </SortableContext>
       </Zone>
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_minmax(0,180px)]">
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.sort', 'Sort')}</span>
-          <select
-            value={sortField}
-            onChange={(e) => {
-              const value = e.target.value
-              if (!value) return setSort([])
-              setSort([{ field: value, dir: sortDir }])
-            }}
-            disabled={!canEdit}
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="">{t('reports.detail.fields.sortNone', 'No sort')}</option>
-            {sortableFields.map((f) => (
-              <option key={f.key} value={f.key}>{t(f.labelKey, f.key)}</option>
-            ))}
-          </select>
-        </label>
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-foreground">{t('reports.detail.fields.sortDir', 'Direction')}</span>
-          <select
-            value={sortDir}
-            onChange={(e) => {
-              if (!sortField) return
-              setSort([{ field: sortField, dir: e.target.value as 'asc' | 'desc' }])
-            }}
-            disabled={!canEdit || !sortField}
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="asc">{t('reports.detail.fields.sortAsc', 'Ascending')}</option>
-            <option value="desc">{t('reports.detail.fields.sortDesc', 'Descending')}</option>
-          </select>
-        </label>
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.limit', 'Limit')}</span>
-          <Input
-            type="number"
-            min={1}
-            max={100000}
-            value={definition.limit ?? ''}
-            onChange={(e) => {
-              const raw = e.target.value
-              if (!raw.trim()) return setLimit(undefined)
-              const parsed = Number(raw)
-              if (!Number.isFinite(parsed) || parsed <= 0) return
-              setLimit(Math.min(Math.floor(parsed), 100_000))
-            }}
-            disabled={!canEdit}
-            placeholder={t('reports.detail.fields.limitPlaceholder', 'No limit')}
-            className="h-9"
-          />
-        </label>
-      </div>
+    </div>
+  )
+}
+
+/**
+ * Sort + Direction + Limit row, lifted out of FlatListCanvas so it can
+ * render inside the Filters tab. Reads/writes `definition.sort` and
+ * `definition.limit` on flat_list reports; renders nothing for report
+ * types that don't surface a sort/limit knob (grouped/pivot/chart/summary
+ * have their own sort affordances).
+ */
+function SortLimitRow({
+  definition,
+  fields,
+  canEdit,
+  onChange,
+  t,
+}: {
+  definition: Definition
+  fields: DatasetFieldRow[]
+  canEdit: boolean
+  onChange: (next: Definition) => void
+  t: ReturnType<typeof useT>
+}) {
+  if (definition.type !== 'flat_list') return null
+  const sortableFields = fields.filter((f) => f.sortable !== false)
+  const sortField = definition.sort[0]?.field ?? ''
+  const sortDir = (definition.sort[0]?.dir ?? 'asc') as 'asc' | 'desc'
+  const setSort = (next: SortShape[]) => onChange({ ...definition, sort: next })
+  const setLimit = (next?: number) => onChange({ ...definition, limit: next })
+  return (
+    <div className="grid gap-3 sm:grid-cols-[1fr_1fr_minmax(0,180px)]">
+      <label className="block space-y-1">
+        <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.sort', 'Sort')}</span>
+        <select
+          value={sortField}
+          onChange={(e) => {
+            const value = e.target.value
+            if (!value) return setSort([])
+            setSort([{ field: value, dir: sortDir }])
+          }}
+          disabled={!canEdit}
+          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+        >
+          <option value="">{t('reports.detail.fields.sortNone', 'No sort')}</option>
+          {sortableFields.map((f) => (
+            <option key={f.key} value={f.key}>{t(f.labelKey, f.key)}</option>
+          ))}
+        </select>
+      </label>
+      <label className="block space-y-1">
+        <span className="text-xs font-medium text-foreground">{t('reports.detail.fields.sortDir', 'Direction')}</span>
+        <select
+          value={sortDir}
+          onChange={(e) => {
+            if (!sortField) return
+            setSort([{ field: sortField, dir: e.target.value as 'asc' | 'desc' }])
+          }}
+          disabled={!canEdit || !sortField}
+          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+        >
+          <option value="asc">{t('reports.detail.fields.sortAsc', 'Ascending')}</option>
+          <option value="desc">{t('reports.detail.fields.sortDesc', 'Descending')}</option>
+        </select>
+      </label>
+      <label className="block space-y-1">
+        <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.limit', 'Limit')}</span>
+        <Input
+          type="number"
+          min={1}
+          max={100000}
+          value={definition.limit ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value
+            if (!raw.trim()) return setLimit(undefined)
+            const parsed = Number(raw)
+            if (!Number.isFinite(parsed) || parsed <= 0) return
+            setLimit(Math.min(Math.floor(parsed), 100_000))
+          }}
+          disabled={!canEdit}
+          placeholder={t('reports.detail.fields.limitPlaceholder', 'No limit')}
+          className="h-9"
+        />
+      </label>
     </div>
   )
 }
@@ -2282,6 +2353,39 @@ const TEXT_LIKE_KINDS = new Set(['id', 'text', 'fk'])
 const NUMERIC_FILTER_KINDS = new Set(['integer', 'float', 'money'])
 const DATE_FILTER_KINDS = new Set(['date', 'datetime'])
 
+/**
+ * Normalise a dataset enum field's declared options into `{ value, label,
+ * labelKey? }` triples. The DSL accepts three shapes per option — bare
+ * string, bare number, or `{ value, labelKey? }`. Empty list when the
+ * field has no inline options (e.g. when options live in a dictionary).
+ */
+function enumOptionList(field: DatasetFieldRow | undefined): Array<{ value: string; label: string; labelKey?: string }> {
+  if (!field || field.kind !== 'enum') return []
+  const raw = field.options
+  if (!Array.isArray(raw)) return []
+  return raw.map((opt) => {
+    if (typeof opt === 'string' || typeof opt === 'number') {
+      const v = String(opt)
+      return { value: v, label: v }
+    }
+    const v = String(opt.value)
+    return { value: v, label: v, labelKey: opt.labelKey }
+  })
+}
+
+/**
+ * Stable enum-order index for a value, used by the aggregator's enum-aware
+ * comparator (item 4 from the builder polish round). Returns `Number.MAX_SAFE_INTEGER`
+ * for values not in the option list so unknown values sort last.
+ */
+function enumOptionIndex(field: DatasetFieldRow | undefined, value: unknown): number {
+  const opts = enumOptionList(field)
+  if (!opts.length) return Number.MAX_SAFE_INTEGER
+  const v = value == null ? '' : String(value)
+  const idx = opts.findIndex((o) => o.value === v)
+  return idx < 0 ? Number.MAX_SAFE_INTEGER : idx
+}
+
 const TEXT_OPS: FilterOp[] = ['contains', 'starts_with', 'ends_with', 'eq', 'ne', 'is_null', 'is_not_null']
 const ENUM_OPS: FilterOp[] = ['eq', 'ne', 'in', 'nin', 'is_null', 'is_not_null']
 const BOOL_OPS: FilterOp[] = ['eq', 'is_null', 'is_not_null']
@@ -2710,6 +2814,28 @@ function renderLiteralValueInput({ field, op, value, onChange, canEdit, isBetwee
   }
 
   if (field.kind === 'enum') {
+    // Render a dropdown when the dataset declared inline options. Free-text
+    // fallback covers fields whose options live in a dictionary (still
+    // resolved server-side at filter time) — those can't be enumerated here.
+    const opts = enumOptionList(field)
+    if (opts.length > 0) {
+      const current = value == null ? '' : String(value)
+      return (
+        <select
+          value={current}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={!canEdit}
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          <option value="">{t('reports.detail.filters.enumNoValue', '— pick a value —')}</option>
+          {opts.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.labelKey ? t(opt.labelKey, opt.label) : opt.label}
+            </option>
+          ))}
+        </select>
+      )
+    }
     return (
       <Input
         value={value == null ? '' : String(value)}

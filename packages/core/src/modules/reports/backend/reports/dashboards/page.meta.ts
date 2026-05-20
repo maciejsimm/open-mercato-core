@@ -9,13 +9,13 @@ const dashboardsIcon = React.createElement(
   React.createElement('rect', { x: 3, y: 16, width: 7, height: 5, rx: 1 }),
 )
 
+// Top-level entry — same rationale as the Reports list page: this should
+// stay visible in the sidebar regardless of group-collapse state.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.view'],
   pageTitle: 'Dashboards',
   pageTitleKey: 'reports.dashboards.nav.title',
-  pageGroup: 'Reports',
-  pageGroupKey: 'reports.nav.group',
   pagePriority: 50,
   pageOrder: 110,
   icon: dashboardsIcon,
