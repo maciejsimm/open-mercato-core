@@ -9,13 +9,15 @@ const embedsIcon = React.createElement(
   React.createElement('path', { d: 'M8 16h8' }),
 )
 
+// Hidden from the sidebar — accessed via the "New Embed" child of
+// Dashboards or via deep link. Embeds list management lives on the
+// per-record detail UI rather than as a global sidebar entry.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.embed.manage'],
   pageTitle: 'Embeds',
   pageTitleKey: 'reports.embeds.nav.title',
-  pageGroup: 'Reports',
-  pageGroupKey: 'reports.nav.group',
+  navHidden: true,
   pagePriority: 50,
   pageOrder: 120,
   icon: embedsIcon,

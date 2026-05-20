@@ -239,6 +239,8 @@ type SerializablePageMetadata = {
   priority?: number
   pagePriority?: number
   navHidden?: boolean
+  /** Explicit nav parent href; `null` forces top-level. See PageMetadata.pageParent. */
+  pageParent?: string | null
   breadcrumb?: Array<{ label: string; labelKey?: string; href?: string }>
   pageContext?: 'main' | 'admin' | 'settings' | 'profile'
   placement?: {
@@ -1887,7 +1889,7 @@ function detectExportedHttpMethods(sourceFile: string): HttpMethod[] {
 }
 
 function buildPageRouteProps(metaExpr: string, routePath: string): string {
-  return `pattern: ${toLiteral(routePath || '/')}, requireAuth: (${metaExpr})?.requireAuth, requireRoles: (${metaExpr})?.requireRoles, requireFeatures: (${metaExpr})?.requireFeatures, requireCustomerAuth: (${metaExpr})?.requireCustomerAuth, requireCustomerFeatures: (${metaExpr})?.requireCustomerFeatures, nav: (${metaExpr})?.nav, title: (${metaExpr})?.pageTitle ?? (${metaExpr})?.title, titleKey: (${metaExpr})?.pageTitleKey ?? (${metaExpr})?.titleKey, group: (${metaExpr})?.pageGroup ?? (${metaExpr})?.group, groupKey: (${metaExpr})?.pageGroupKey ?? (${metaExpr})?.groupKey, icon: (${metaExpr})?.icon, order: (${metaExpr})?.pageOrder ?? (${metaExpr})?.order, priority: (${metaExpr})?.pagePriority ?? (${metaExpr})?.priority, navHidden: (${metaExpr})?.navHidden, visible: (${metaExpr})?.visible, enabled: (${metaExpr})?.enabled, breadcrumb: (${metaExpr})?.breadcrumb, pageContext: (${metaExpr})?.pageContext, placement: (${metaExpr})?.placement`
+  return `pattern: ${toLiteral(routePath || '/')}, requireAuth: (${metaExpr})?.requireAuth, requireRoles: (${metaExpr})?.requireRoles, requireFeatures: (${metaExpr})?.requireFeatures, requireCustomerAuth: (${metaExpr})?.requireCustomerAuth, requireCustomerFeatures: (${metaExpr})?.requireCustomerFeatures, nav: (${metaExpr})?.nav, title: (${metaExpr})?.pageTitle ?? (${metaExpr})?.title, titleKey: (${metaExpr})?.pageTitleKey ?? (${metaExpr})?.titleKey, group: (${metaExpr})?.pageGroup ?? (${metaExpr})?.group, groupKey: (${metaExpr})?.pageGroupKey ?? (${metaExpr})?.groupKey, icon: (${metaExpr})?.icon, order: (${metaExpr})?.pageOrder ?? (${metaExpr})?.order, priority: (${metaExpr})?.pagePriority ?? (${metaExpr})?.priority, navHidden: (${metaExpr})?.navHidden, pageParent: (${metaExpr})?.pageParent, visible: (${metaExpr})?.visible, enabled: (${metaExpr})?.enabled, breadcrumb: (${metaExpr})?.breadcrumb, pageContext: (${metaExpr})?.pageContext, placement: (${metaExpr})?.placement`
 }
 
 function buildPageRouteManifestSpread(metaExpr: string, routePath: string): WriterFunction {
@@ -1990,6 +1992,9 @@ function normalizePageMetadata(raw: unknown): SerializablePageMetadata | null {
   if (typeof source.priority === 'number') normalized.priority = source.priority
   if (typeof source.pagePriority === 'number') normalized.pagePriority = source.pagePriority
   if (typeof source.navHidden === 'boolean') normalized.navHidden = source.navHidden
+  if (typeof source.pageParent === 'string' || source.pageParent === null) {
+    normalized.pageParent = source.pageParent
+  }
   if (typeof source.pageContext === 'string' && ['main', 'admin', 'settings', 'profile'].includes(source.pageContext)) {
     normalized.pageContext = source.pageContext as SerializablePageMetadata['pageContext']
   }
@@ -3173,6 +3178,7 @@ function buildPageRouteEntries(metaExpr: WriterFunction, routePath: string): Gen
       ]),
     },
     { name: 'navHidden', value: optionalPropertyAccess(meta, 'navHidden') },
+    { name: 'pageParent', value: optionalPropertyAccess(meta, 'pageParent') },
     { name: 'visible', value: optionalPropertyAccess(meta, 'visible') },
     { name: 'enabled', value: optionalPropertyAccess(meta, 'enabled') },
     { name: 'breadcrumb', value: optionalPropertyAccess(meta, 'breadcrumb') },

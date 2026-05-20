@@ -57,6 +57,15 @@ export type PageMetadata = {
   groupKey?: string
   pageGroup?: string
   pageGroupKey?: string
+  /**
+   * Explicit nav parent href. When set, the page nests under the entry at
+   * this exact href in the sidebar — overriding the default URL-prefix
+   * detection. Use `null` to force a page to render as a top-level entry
+   * even when its URL would otherwise nest it under another page (e.g.
+   * `/backend/reports/dashboards` is the Dashboards root, not a child of
+   * `/backend/reports`).
+   */
+  pageParent?: string | null
   // Ordering and visuals
   order?: number
   pageOrder?: number
@@ -121,6 +130,8 @@ export type ModuleRoute = {
   order?: number
   priority?: number
   navHidden?: boolean
+  /** See PageMetadata.pageParent. */
+  pageParent?: string | null
   visible?: (ctx: RouteVisibilityContext) => boolean | Promise<boolean>
   enabled?: (ctx: RouteVisibilityContext) => boolean | Promise<boolean>
   breadcrumb?: Array<{ label: string; labelKey?: string; href?: string }>

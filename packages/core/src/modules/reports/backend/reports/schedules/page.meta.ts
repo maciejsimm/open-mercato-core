@@ -7,13 +7,15 @@ const schedulesIcon = React.createElement(
   React.createElement('path', { d: 'M12 7v5l3 2' }),
 )
 
+// Hidden from the sidebar — accessed via "New Schedule" (a child of
+// Dashboards) or by deep link. Schedule administration sits inside the
+// per-report detail UI rather than as a global sidebar entry.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.schedule'],
   pageTitle: 'Schedules',
   pageTitleKey: 'reports.schedules.nav.title',
-  pageGroup: 'Reports',
-  pageGroupKey: 'reports.nav.group',
+  navHidden: true,
   pagePriority: 50,
   pageOrder: 130,
   icon: schedulesIcon,

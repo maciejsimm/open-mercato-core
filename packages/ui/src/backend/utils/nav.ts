@@ -4,7 +4,7 @@ import type { Module, ModuleRoute, PageMetadata } from '@open-mercato/shared/mod
 import { hasAllFeatures as checkFeatures } from '@open-mercato/shared/security/features'
 
 /** Route with optional page-metadata aliases that may be merged during generation. */
-type NavRoute = ModuleRoute & Partial<Pick<PageMetadata, 'pageTitleKey' | 'pageGroupKey'>>
+type NavRoute = ModuleRoute & Partial<Pick<PageMetadata, 'pageTitleKey' | 'pageGroupKey' | 'pageParent'>>
 
 export type AdminNavItem = {
   group: string
@@ -22,6 +22,8 @@ export type AdminNavItem = {
   icon?: ReactNode
   children?: AdminNavItem[]
   pageContext?: 'main' | 'admin' | 'settings' | 'profile'
+  /** Mirror of NavRoute.pageParent — see PageMetadata for semantics. */
+  pageParent?: string | null
 }
 
 export type AdminNavFeatureChecker = (features: string[]) => Promise<Iterable<string> | null | undefined>
@@ -408,16 +410,38 @@ export async function buildAdminNav(
         priority,
         icon,
         pageContext,
+        pageParent: r.pageParent,
       })
     }
   }
-  // Build hierarchy: treat routes whose href starts with a parent href + '/'
-  // Sort by href length (shortest first) so potential parents are processed before children
+  // Build hierarchy. Two rules, applied in order:
+  //   1. `pageParent` (explicit) — when set, the page nests under the entry
+  //      at that exact href. `null` opts the page out of auto-nesting and
+  //      forces it to render as a root.
+  //   2. URL-prefix detection (legacy default) — a route whose href is a
+  //      strict path prefix of another in the same group nests under it.
+  //
+  // Sort by href length (shortest first) so potential parents are
+  // registered in `byHref` before their would-be children try to attach.
   const sorted = [...entries].sort((a, b) => a.href.length - b.href.length)
   const byHref = new Map<string, AdminNavItem>()
   const roots: AdminNavItem[] = []
+  const deferredExplicitParent: Array<{ entry: AdminNavItem; parentHref: string }> = []
   for (const e of sorted) {
-    // Walk up the href segments to find the longest matching parent in the same group
+    byHref.set(e.href, e)
+    // Explicit opt-out: pageParent === null → always root.
+    if (e.pageParent === null) {
+      roots.push(e)
+      continue
+    }
+    // Explicit parent: defer until the second pass so we don't depend on
+    // the parent being registered earlier (the parent's href may be
+    // shorter OR longer than the child's).
+    if (typeof e.pageParent === 'string' && e.pageParent.length > 0) {
+      deferredExplicitParent.push({ entry: e, parentHref: e.pageParent })
+      continue
+    }
+    // Default: URL-prefix nesting within the same group.
     let parent: AdminNavItem | undefined
     const segments = e.href.split('/')
     for (let i = segments.length - 1; i >= 2; i--) {
@@ -427,12 +451,22 @@ export async function buildAdminNav(
         break
       }
     }
-    byHref.set(e.href, e)
     if (parent) {
       parent.children = parent.children || []
       parent.children.push(e)
     } else {
       roots.push(e)
+    }
+  }
+  // Resolve explicit-parent entries now that `byHref` is fully populated.
+  // Misses (typo'd href, RBAC-hidden parent) fall back to roots.
+  for (const { entry, parentHref } of deferredExplicitParent) {
+    const parent = byHref.get(parentHref)
+    if (parent) {
+      parent.children = parent.children || []
+      parent.children.push(entry)
+    } else {
+      roots.push(entry)
     }
   }
 

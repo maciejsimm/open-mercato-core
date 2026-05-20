@@ -107,6 +107,43 @@ describe('settings navigation helpers', () => {
     expect(prefixes).not.toContain('/backend/customer_accounts')
   })
 
+  it('honors pageParent: <href> for explicit cross-tree nav nesting', async () => {
+    const entries = await buildAdminNav(
+      [
+        {
+          id: 'reports',
+          backendRoutes: [
+            { pattern: '/backend/reports', title: 'Reports' },
+            { pattern: '/backend/reports/dashboards', title: 'Dashboards', pageParent: null },
+            // Lives at /backend/reports/schedules/new in the URL tree but
+            // explicitly nests under /backend/reports/dashboards in the nav.
+            {
+              pattern: '/backend/reports/schedules/new',
+              title: 'New Schedule',
+              pageParent: '/backend/reports/dashboards',
+            },
+          ],
+        },
+      ],
+      { auth: { roles: [] } },
+      undefined,
+      undefined,
+      undefined,
+    )
+
+    const reports = entries.find((e) => e.href === '/backend/reports')
+    const dashboards = entries.find((e) => e.href === '/backend/reports/dashboards')
+    expect(reports).toBeTruthy()
+    expect(dashboards).toBeTruthy()
+    // Dashboards must be a root, not a child of /backend/reports — the
+    // default URL-prefix detection would have nested it without
+    // `pageParent: null`.
+    expect(reports?.children?.map((c) => c.href) ?? []).not.toContain('/backend/reports/dashboards')
+    // New Schedule must nest under Dashboards (explicit pageParent),
+    // not under /backend/reports/schedules (URL-prefix default).
+    expect(dashboards?.children?.map((c) => c.href) ?? []).toContain('/backend/reports/schedules/new')
+  })
+
   it('matches wildcard grants when building admin navigation', async () => {
     const entries = await buildAdminNav(
       [
