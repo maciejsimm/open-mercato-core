@@ -15,7 +15,6 @@ import { createInterceptorsExtension } from './interceptors'
 import { createMessagesExtension } from './messages'
 import { createNotificationsExtension } from './notifications'
 import { createPageMiddlewareExtension } from './page-middleware'
-import { createReportsDatasetsExtension } from './reports-datasets'
 import { createSearchExtension } from './search'
 import { createTranslatableFieldsExtension } from './translatable-fields'
 import { createWorkflowsExtension } from './workflows'
@@ -40,7 +39,6 @@ export function loadGeneratorExtensions(resolver?: AgentFilesResolver): Generato
     createInterceptorsExtension(),
     createComponentOverridesExtension(),
     createInboxActionsExtension(),
-    createReportsDatasetsExtension(),
     createGuardsExtension(),
     createCommandInterceptorsExtension(),
     createPageMiddlewareExtension(),
