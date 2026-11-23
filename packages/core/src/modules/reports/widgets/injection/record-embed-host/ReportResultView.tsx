@@ -76,7 +76,7 @@ export function ReportResultView({ rows, meta, definition, preferTable, maxRows 
   }
 
   if (!preferTable && definition?.type === 'chart' && definition.chart) {
-    return <ReportChart spec={definition.chart} rows={rows} />
+    return <ReportChart spec={definition.chart} rows={rows} columns={meta?.columns} columnFormats={columnFormats} />
   }
 
   const keys = resolveColumnKeys(rows, meta)
