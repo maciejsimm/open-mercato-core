@@ -1,3 +1,5 @@
+import { measureAlias } from '@open-mercato/shared/modules/reports/dsl'
+
 export type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
 
 export type MeasureExpr = {
@@ -63,12 +65,7 @@ export function readFieldValue(row: Row, path: string): unknown {
   return cursor
 }
 
-export function measureAlias(measure: MeasureExpr): string {
-  if (measure.alias && measure.alias.trim().length > 0) return measure.alias.trim()
-  const sanitized = measure.field.replace(/[^a-zA-Z0-9_]/g, '_')
-  if (measure.aggregation === 'count' && (sanitized === '_' || sanitized === '')) return 'count'
-  return `${measure.aggregation}_${sanitized}`
-}
+export { measureAlias }
 
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined

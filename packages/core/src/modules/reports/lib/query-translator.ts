@@ -15,6 +15,12 @@ export type TranslateContext = {
   pageSize?: number
   /** Optional starting page. Default 1. */
   page?: number
+  /**
+   * Running user identity forwarded to the QueryEngine as UMES `extensions`
+   * so row-level RBAC (sync `*.querying` subscribers + query enrichers)
+   * applies to report reads.
+   */
+  rbac?: { userId?: string; userFeatures?: readonly string[] }
 }
 
 const SUPPORTED_OPS: Record<string, Filter['op']> = {
@@ -154,6 +160,14 @@ export function translateFlatList(
     tenantId: ctx.tenantId,
     organizationId: ctx.organizationId,
     includeCustomFields: hasCustomFieldFields(definition.fields),
+    ...(ctx.rbac && (ctx.rbac.userId || ctx.rbac.userFeatures)
+      ? {
+          extensions: {
+            ...(ctx.rbac.userId ? { userId: ctx.rbac.userId } : {}),
+            ...(ctx.rbac.userFeatures ? { userFeatures: [...ctx.rbac.userFeatures] } : {}),
+          },
+        }
+      : {}),
   }
 }
 

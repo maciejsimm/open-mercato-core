@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { measureAlias } from '@open-mercato/shared/modules/reports/dsl'
 
 const uuid = () => z.string().uuid()
 
@@ -135,10 +136,20 @@ const filterSchema: z.ZodType<FilterShape> = z.lazy(() =>
   ]),
 )
 
+export const fieldFormatSchema = z.object({
+  precision: z.number().int().min(0).max(10).optional(),
+  dateStyle: z.enum(['short', 'medium', 'long']).optional(),
+  percent: z.boolean().optional(),
+  compact: z.boolean().optional(),
+})
+
+export const columnFormatsSchema = z.record(z.string().min(1).max(200), fieldFormatSchema)
+
 const flatListDefinitionSchema = z.object({
   type: z.literal('flat_list'),
   fields: z.array(z.string().min(1)).min(1).max(100),
   filters: z.array(filterSchema).default([]),
+  columnFormats: columnFormatsSchema.optional(),
   sort: z.array(sortSchema).default([]),
   limit: z.number().int().min(1).max(100_000).optional(),
 })
@@ -201,6 +212,7 @@ const groupedDefinitionSchema = z
     groupBy: groupByListSchema,
     measures: measuresListSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
     sort: z.array(sortSchema).default([]),
     limit: z.number().int().min(1).max(100_000).optional(),
   })
@@ -226,6 +238,7 @@ const pivotDefinitionSchema = z
     cols: z.array(z.string().min(1)).min(1).max(10),
     value: measureExprSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
   })
   .superRefine((def, ctx) => {
     const rows = new Set(def.rows)
@@ -245,6 +258,7 @@ const chartDefinitionSchema = z
     type: z.literal('chart'),
     chart: chartSpecSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
     groupBy: z.array(z.string().min(1)).max(10).optional(),
     measures: z.array(measureExprSchema).max(20).optional(),
     limit: z.number().int().min(1).max(100_000).optional(),
@@ -260,7 +274,7 @@ const chartDefinitionSchema = z
       })
     }
     if (def.measures && def.measures.length > 0) {
-      const aliases = new Set(def.measures.map((m) => m.alias ?? `${m.aggregation}_${m.field}`))
+      const aliases = new Set(def.measures.map((m) => measureAlias(m)))
       for (const y of yFields) {
         if (!aliases.has(y)) {
           ctx.addIssue({
@@ -277,6 +291,7 @@ const summaryDefinitionSchema = z.object({
   type: z.literal('summary'),
   measures: measuresListSchema,
   filters: z.array(filterSchema).default([]),
+  columnFormats: columnFormatsSchema.optional(),
 })
 
 export const reportDefinitionSchema = z.discriminatedUnion('type', [

@@ -1,11 +1,14 @@
-import type {
-  Dataset,
-  FilterExpr,
-  ParameterDef,
-  ReportDefinition,
-  Sort as DslSort,
+import {
+  effectiveChartGroupBy,
+  type Dataset,
+  type FilterExpr,
+  type ParameterDef,
+  type ReportColumnDescriptor,
+  type ReportDefinition,
+  type Sort as DslSort,
 } from '@open-mercato/shared/modules/reports/dsl'
-import { SortDir, type Filter, type QueryEngine, type QueryOptions, type Sort } from '@open-mercato/shared/lib/query/types'
+import type { QueryEngine, QueryOptions } from '@open-mercato/shared/lib/query/types'
+import { buildColumnDescriptors, definitionMeasures, describeField } from './columns'
 import { createProfiler, shouldEnableProfiler, type Profiler } from '@open-mercato/shared/lib/profiler'
 import { bindFiltersToParameters, resolveParameters } from './parameters'
 import { validateDefinitionAgainstAcl } from './field-redact'
@@ -48,6 +51,14 @@ export type ExecutionInput = {
   inMemoryCap?: number
   /** Pin the clock when resolving relative date-range tokens. */
   now?: Date
+  /**
+   * Running user id. Forwarded with `userFeatures` to the QueryEngine so the
+   * row-level RBAC layer (sync `*.querying` subscribers, query enrichers)
+   * applies to report reads exactly like it does to CRUD list reads.
+   */
+  userId?: string
+  /** Flat-list page (1-based). Aggregated reports always read every page up to the cap. */
+  page?: number
 }
 
 export type ExecutionResult = {
@@ -60,6 +71,12 @@ export type ExecutionResult = {
     cap: number
     /** Field list the caller can use to drive a header row (aggregated reports only). */
     fields?: string[]
+    /** One descriptor per output column (kind, currency, format) — drives display formatting. */
+    columns?: ReportColumnDescriptor[]
+    /** Money measure columns aggregated over rows with more than one currency. */
+    mixedCurrencyColumns?: string[]
+    /** Raw rows read before aggregation (aggregated reports only). */
+    scannedRows?: number
   }
 }
 
@@ -117,7 +134,8 @@ export async function executeFlatList(
         organizationId: input.organizationId,
         filters: boundFilters,
         pageSize: Math.min(cap, 100),
-        page: 1,
+        page: Math.max(1, input.page ?? 1),
+        rbac: { userId: input.userId, userFeatures: [...input.userFeatures] },
       }),
     )
 
@@ -130,14 +148,23 @@ export async function executeFlatList(
 
     const rows = result.items as Record<string, unknown>[]
     const total = typeof result.total === 'number' ? result.total : rows.length
-    const truncated = rows.length >= cap
+    const truncated = total > cap
 
     profiler.end({ rows: rows.length, total, truncated, cap })
     return {
       mode: 'sync',
       rows,
       total,
-      meta: { duration_ms, truncated, cap },
+      meta: {
+        duration_ms,
+        truncated,
+        cap,
+        columns: input.definition.fields.map((key) => {
+          const descriptor = describeField(input.dataset, key)
+          const override = input.definition.columnFormats?.[key]
+          return override ? { ...descriptor, format: { ...(descriptor.format ?? {}), ...override } } : descriptor
+        }),
+      },
     }
   } catch (err) {
     profiler.end({ error: err instanceof Error ? err.message : String(err) })
@@ -161,6 +188,61 @@ export function shouldDispatchAsync(
   if (requested === 'async') return { mode: 'async', reason: 'requested', estimatedRows, cap }
   if (estimatedRows > cap) return { mode: 'async', reason: 'over_cap', estimatedRows, cap }
   return null
+}
+
+/**
+ * Row-count probe used before a sync run: a `pageSize: 1` query whose
+ * `total` tells us whether the report would scan more than the in-memory
+ * cap. Same filters, scope and RBAC context as the real run.
+ */
+export async function estimateReportRows(queryEngine: QueryEngine, input: ExecutionInput): Promise<number> {
+  validateDefinitionAgainstAcl(input.definition, input.dataset, input.userFeatures)
+  const now = input.now ?? new Date()
+  const resolved = resolveParameters(input.params, input.parameterDefs, now)
+  const boundFilters = bindFiltersToParameters(input.definition.filters, resolved, now)
+  const ctx = {
+    tenantId: input.tenantId,
+    organizationId: input.organizationId,
+    filters: boundFilters,
+    pageSize: 1,
+    page: 1,
+    rbac: { userId: input.userId, userFeatures: [...input.userFeatures] },
+  }
+  const opts =
+    input.definition.type === 'flat_list'
+      ? translateFlatList(input.definition, input.dataset, ctx)
+      : buildAggregationQueryOptions(input.definition, input.dataset, { ...ctx, cap: 1 })
+  const probe = await queryEngine.query(input.dataset.entityType, { ...opts, page: { page: 1, pageSize: 1 } })
+  if (typeof probe.total === 'number') return probe.total
+  return probe.items.length
+}
+
+/**
+ * Read every page (`pageSize ≤ 100`, the platform cap) until `cap` rows are
+ * collected or the result set is exhausted. Returns the rows plus the
+ * engine-reported total so the caller can flag truncation.
+ */
+async function readPagesUntilCap(
+  queryEngine: QueryEngine,
+  entityType: Dataset['entityType'],
+  baseOpts: QueryOptions,
+  cap: number,
+): Promise<{ rows: Row[]; total: number | null }> {
+  const pageSize = Math.min(100, Math.max(1, cap))
+  const rows: Row[] = []
+  let total: number | null = null
+  for (let page = 1; rows.length < cap; page += 1) {
+    const result = await queryEngine.query(entityType, { ...baseOpts, page: { page, pageSize } })
+    const items = result.items as Row[]
+    if (typeof result.total === 'number') total = result.total
+    for (const item of items) {
+      if (rows.length >= cap) break
+      rows.push(item)
+    }
+    if (items.length < pageSize) break
+    if (total !== null && page * pageSize >= total) break
+  }
+  return { rows, total }
 }
 
 // ============================================================================
@@ -209,7 +291,7 @@ function collectReferencedFields(definition: ReportDefinition): string[] {
     case 'chart':
       add(definition.chart?.xField)
       // yFields are measure aliases, not dataset fields — exclude.
-      for (const g of definition.groupBy ?? []) add(g)
+      for (const g of effectiveChartGroupBy(definition)) add(g)
       for (const m of definition.measures ?? []) add(m.field)
       walkFilters(definition.filters)
       break
@@ -221,6 +303,52 @@ function collectReferencedFields(definition: ReportDefinition): string[] {
   return Array.from(set)
 }
 
+function moneyCurrencyFields(definition: ReportDefinition, dataset: Dataset): string[] {
+  const out = new Set<string>()
+  for (const measure of definitionMeasures(definition)) {
+    const field = dataset.fields.find((f) => f.key === measure.field)
+    if (field?.kind === 'money' && field.currencyField) out.add(field.currencyField)
+  }
+  return Array.from(out)
+}
+
+/**
+ * Money measures must never silently sum across currencies. When a money
+ * measure's rows carry more than one currency and the currency column is
+ * not one of the group keys, the column is reported in
+ * `meta.mixedCurrencyColumns` and its descriptor drops the currency so it
+ * renders as a plain number. When the rows share one currency the
+ * descriptor carries that code.
+ */
+function applyCurrencyResolution(
+  columns: ReportColumnDescriptor[],
+  rawRows: readonly Row[],
+  groupKeys: readonly string[],
+): string[] {
+  const mixed: string[] = []
+  for (const column of columns) {
+    if (column.kind !== 'money' || !column.aggregation || !column.currencyField) continue
+    if (groupKeys.includes(column.currencyField)) continue
+    const codes = new Set<string>()
+    for (const row of rawRows) {
+      const value = readFieldValue(row, column.currencyField)
+      if (typeof value === 'string' && value.length > 0) codes.add(value.toUpperCase())
+      if (codes.size > 1) break
+    }
+    if (codes.size === 1) {
+      column.currency = Array.from(codes)[0]
+      delete column.currencyField
+    } else if (codes.size > 1) {
+      mixed.push(column.key)
+      delete column.currencyField
+      delete column.currency
+    } else {
+      delete column.currencyField
+    }
+  }
+  return mixed
+}
+
 function buildAggregationQueryOptions(
   definition: Exclude<ReportDefinition, { type: 'flat_list' }>,
   dataset: Dataset,
@@ -229,6 +357,7 @@ function buildAggregationQueryOptions(
     organizationId: string
     filters: FilterExpr[]
     cap: number
+    rbac?: { userId?: string; userFeatures?: readonly string[] }
   },
 ): QueryOptions {
   const projection = collectReferencedFields(definition)
@@ -237,6 +366,9 @@ function buildAggregationQueryOptions(
     if (!datasetKeys.has(key)) {
       throw new Error(`executeReport: field '${key}' is not declared in dataset '${dataset.id}'`)
     }
+  }
+  for (const currencyField of moneyCurrencyFields(definition, dataset)) {
+    if (datasetKeys.has(currencyField) && !projection.includes(currencyField)) projection.push(currencyField)
   }
   // Build a flat_list-shaped slice so we can reuse translateFlatList's filter
   // translator, which is the same code path the flat_list execution uses.
@@ -253,6 +385,7 @@ function buildAggregationQueryOptions(
     filters: ctx.filters,
     pageSize: Math.min(ctx.cap, 100),
     page: 1,
+    rbac: ctx.rbac,
   })
   return opts
 }
@@ -361,15 +494,16 @@ export async function executeReport(
         organizationId: input.organizationId,
         filters: boundFilters,
         cap,
+        rbac: { userId: input.userId, userFeatures: [...input.userFeatures] },
       }),
     )
 
     const started = Date.now()
-    const result = await profiler.measure('query.execute', () =>
-      queryEngine.query(input.dataset.entityType, queryOpts),
+    const read = await profiler.measure('query.execute', () =>
+      readPagesUntilCap(queryEngine, input.dataset.entityType, queryOpts, cap),
     )
-    const rawRows = result.items as Row[]
-    const truncated = rawRows.length >= cap
+    const rawRows = read.rows
+    const truncated = read.total !== null ? read.total > rawRows.length : rawRows.length >= cap
 
     let rows: Row[] = []
     let outFields: string[] = []
@@ -435,14 +569,15 @@ export async function executeReport(
     } else {
       const def = input.definition
       await profiler.measure('aggregate.chart', () => {
+        const chartGroupBy = effectiveChartGroupBy(def)
         rows = aggregateGroupBy({
           rows: rawRows,
-          groupBy: def.groupBy ?? [],
+          groupBy: chartGroupBy,
           measures: def.measures ?? [],
         })
         limit = def.limit
         outFields = [
-          ...(def.groupBy ?? []),
+          ...chartGroupBy,
           ...(def.measures ?? []).map((m) => measureAlias(m)),
         ]
       })
@@ -452,13 +587,32 @@ export async function executeReport(
       rows = rows.slice(0, limit)
     }
 
+    const columns = buildColumnDescriptors(input.definition, input.dataset, outFields)
+    const groupKeys =
+      input.definition.type === 'grouped'
+        ? input.definition.groupBy
+        : input.definition.type === 'chart'
+          ? effectiveChartGroupBy(input.definition)
+          : input.definition.type === 'pivot'
+            ? [...input.definition.rows, ...input.definition.cols]
+            : []
+    const mixedCurrencyColumns = applyCurrencyResolution(columns, rawRows, groupKeys)
+
     const duration_ms = Date.now() - started
     profiler.end({ rows: rows.length, rawRows: rawRows.length, truncated, cap })
     return {
       mode: 'sync',
       rows,
       total: rows.length,
-      meta: { duration_ms, truncated, cap, fields: outFields },
+      meta: {
+        duration_ms,
+        truncated,
+        cap,
+        fields: outFields,
+        columns,
+        scannedRows: rawRows.length,
+        ...(mixedCurrencyColumns.length > 0 ? { mixedCurrencyColumns } : {}),
+      },
     }
   } catch (err) {
     profiler.end({ error: err instanceof Error ? err.message : String(err) })

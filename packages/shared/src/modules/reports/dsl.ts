@@ -95,6 +95,12 @@ export type DatasetFieldBase = {
   filterable?: boolean
   /** Whether the field is sortable. Defaults to filterable. */
   sortable?: boolean
+  /** For `money` fields: the dataset field holding each row's ISO currency code. */
+  currencyField?: string
+  /** For `money` fields: a fixed ISO currency code when the dataset is single-currency. */
+  currency?: string
+  /** Display defaults; the viewer's locale and timezone still apply. */
+  format?: FieldFormat
 }
 
 export type DatasetEnumField = DatasetFieldBase & {
@@ -189,6 +195,66 @@ export function defineMeasure(field: string, aggregation: Aggregation, alias?: s
   return { field, aggregation, alias }
 }
 
+/**
+ * The single measure-alias rule shared by the builder UI, the aggregator and
+ * the definition validator. An explicit alias wins; otherwise the alias is
+ * `<aggregation>_<field>` with every non `[a-zA-Z0-9_]` character replaced
+ * by `_` (so `cf:vip` → `sum_cf_vip`). A `count` over an empty / wildcard
+ * field is simply `count`.
+ */
+export function measureAlias(measure: Pick<MeasureExpr, 'field' | 'aggregation' | 'alias'>): string {
+  if (measure.alias && measure.alias.trim().length > 0) return measure.alias.trim()
+  const sanitized = measure.field.replace(/[^a-zA-Z0-9_]/g, '_')
+  if (measure.aggregation === 'count' && (sanitized === '_' || sanitized === '')) return 'count'
+  return `${measure.aggregation}_${sanitized}`
+}
+
+/**
+ * Group keys a chart definition aggregates by. When `groupBy` is empty the
+ * chart's `xField` is the implicit group key, so a chart with an X axis and
+ * measures always yields one row per X value (client and server agree).
+ */
+export function effectiveChartGroupBy(definition: { groupBy?: string[]; chart: Pick<ChartSpec, 'xField'> }): string[] {
+  if (definition.groupBy && definition.groupBy.length > 0) return definition.groupBy
+  return definition.chart.xField ? [definition.chart.xField] : []
+}
+
+// ---------- Formatting ----------
+
+export type FieldFormat = {
+  /** Fraction digits for numeric output (floats default to 2). */
+  precision?: number
+  /** Date style for `date` / `datetime` output. */
+  dateStyle?: 'short' | 'medium' | 'long'
+  /** Render the numeric value as a percentage (`0.25` → `25%`). */
+  percent?: boolean
+  /** Compact notation (`12 345` → `12K`). */
+  compact?: boolean
+}
+
+/** Per-report column format overrides keyed by output column key. */
+export type ColumnFormats = Record<string, FieldFormat>
+
+/**
+ * Column descriptor returned in execution `meta.columns`, one per output
+ * column, so clients never guess a column's type from its values.
+ */
+export type ReportColumnDescriptor = {
+  key: string
+  labelKey?: string
+  kind: DatasetFieldKind | 'pivot_cell'
+  /** Static currency code when the column is `money` and the code is uniform. */
+  currency?: string
+  /** Row field holding the row's currency code (money columns). */
+  currencyField?: string
+  format?: FieldFormat
+  /** Enum options (for label rendering). */
+  options?: Array<string | number | { value: string | number; labelKey?: string }>
+  /** Source dataset field when the column is a measure. */
+  sourceField?: string
+  aggregation?: Aggregation
+}
+
 // ---------- Report definition shape (shared between server + UI) ----------
 
 export type ChartKind = 'bar' | 'line' | 'pie' | 'area' | 'donut' | 'scatter' | 'combo'
@@ -212,6 +278,8 @@ export type ReportDefinition =
       type: 'flat_list'
       fields: string[]
       filters: FilterExpr[]
+      /** Per-report column format overrides (keyed by output column). */
+      columnFormats?: ColumnFormats
       sort: Sort[]
       limit?: number
     }
@@ -221,6 +289,8 @@ export type ReportDefinition =
       groupBy: string[]
       measures: MeasureExpr[]
       filters: FilterExpr[]
+      /** Per-report column format overrides (keyed by output column). */
+      columnFormats?: ColumnFormats
       sort: Sort[]
       limit?: number
     }
@@ -230,11 +300,15 @@ export type ReportDefinition =
       cols: string[]
       value: MeasureExpr
       filters: FilterExpr[]
+      /** Per-report column format overrides (keyed by output column). */
+      columnFormats?: ColumnFormats
     }
   | {
       type: 'chart'
       chart: ChartSpec
       filters: FilterExpr[]
+      /** Per-report column format overrides (keyed by output column). */
+      columnFormats?: ColumnFormats
       groupBy?: string[]
       measures?: MeasureExpr[]
       limit?: number
@@ -243,6 +317,8 @@ export type ReportDefinition =
       type: 'summary'
       measures: MeasureExpr[]
       filters: FilterExpr[]
+      /** Per-report column format overrides (keyed by output column). */
+      columnFormats?: ColumnFormats
     }
 
 export type ReportType = ReportDefinition['type']
