@@ -15,8 +15,11 @@ import {
   type LineChartDataItem,
   type ScatterSeries,
 } from '@open-mercato/ui/backend/charts'
-import { buildChartRenderPlan, type ChartSpec } from '../lib/chart-spec'
+import { useOptionalLocale, useOptionalT } from '@open-mercato/shared/lib/i18n/context'
+import type { ColumnFormats, ReportColumnDescriptor } from '@open-mercato/shared/modules/reports/dsl'
+import { buildChartRenderPlan, formatChartRenderPlan, type ChartSpec } from '../lib/chart-spec'
 import type { Row } from '../lib/aggregator'
+import { findColumn, formatReportValue } from '../lib/format'
 
 function asChartData<T>(rows: readonly Row[]): T[] {
   // The chart wrappers expect Record<string, string | number | null | undefined>; the
@@ -38,6 +41,16 @@ export type ReportChartProps = {
   emptyMessage?: string
   /** Wrapper class forwarded to whichever chart wrapper is selected. */
   className?: string
+  /** Column descriptors from the run response `meta.columns`; drive axis, tooltip and legend formatting. */
+  columns?: readonly ReportColumnDescriptor[]
+  /** Per-report format overrides (`definition.columnFormats`). */
+  columnFormats?: ColumnFormats
+  /** Human labels for Y series keyed by measure alias (legend + tooltip). */
+  seriesLabels?: Readonly<Record<string, string>>
+}
+
+function sameFormatting(a: ReportColumnDescriptor, b: ReportColumnDescriptor): boolean {
+  return a.kind === b.kind && a.currency === b.currency && JSON.stringify(a.format ?? {}) === JSON.stringify(b.format ?? {})
 }
 
 /**
@@ -45,8 +58,45 @@ export type ReportChartProps = {
  * `@open-mercato/ui/backend/charts/*` wrapper. Never re-implements `<ChartContainer>` /
  * `<ChartTooltip>` primitives — those live in `@open-mercato/ui`.
  */
-export function ReportChart({ spec, rows, title, loading, error, emptyMessage, className }: ReportChartProps) {
-  const plan = React.useMemo(() => buildChartRenderPlan(spec, rows), [spec, rows])
+export function ReportChart({
+  spec,
+  rows,
+  title,
+  loading,
+  error,
+  emptyMessage,
+  className,
+  columns,
+  columnFormats,
+  seriesLabels,
+}: ReportChartProps) {
+  const locale = useOptionalLocale() ?? 'en'
+  const translate = useOptionalT()
+  const formatValue = React.useCallback(
+    (value: unknown, key: string, row?: Row) =>
+      formatReportValue(value, findColumn(columns, key), {
+        locale,
+        translate: translate ? (labelKey: string, fallback: string) => translate(labelKey, fallback) : undefined,
+        row,
+        override: columnFormats?.[key],
+      }),
+    [columnFormats, columns, locale, translate],
+  )
+  const plan = React.useMemo(() => {
+    const raw = buildChartRenderPlan(spec, rows)
+    if (!columns || columns.length === 0) return raw
+    return formatChartRenderPlan(raw, rows, spec, {
+      formatValue,
+      seriesLabel: (key) => seriesLabels?.[key] ?? key,
+    })
+  }, [columns, formatValue, rows, seriesLabels, spec])
+  const valueFormatter = React.useMemo(() => {
+    const yColumns = spec.yFields.map((key) => findColumn(columns, key)).filter((c): c is ReportColumnDescriptor => !!c)
+    if (yColumns.length === 0 || yColumns.length !== spec.yFields.length) return undefined
+    const first = yColumns[0]
+    if (!yColumns.every((c) => sameFormatting(c, first))) return undefined
+    return (value: number) => formatValue(value, first.key)
+  }, [columns, formatValue, spec.yFields])
 
   if (plan.kind === 'pie') {
     return (
@@ -57,6 +107,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showTooltip
       />
     )
@@ -70,6 +121,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showTooltip
       />
     )
@@ -89,6 +141,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showLegend={plan.showLegend}
       />
     )
@@ -104,6 +157,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showLegend={plan.showLegend}
       />
     )
@@ -120,6 +174,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showLegend={plan.showLegend}
       />
     )
@@ -135,6 +190,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showLegend={plan.showLegend}
       />
     )
@@ -150,6 +206,7 @@ export function ReportChart({ spec, rows, title, loading, error, emptyMessage, c
         error={error}
         emptyMessage={emptyMessage}
         className={className}
+        valueFormatter={valueFormatter}
         showLegend={plan.showLegend}
       />
     )
