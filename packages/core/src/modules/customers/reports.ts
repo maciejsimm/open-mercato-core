@@ -83,6 +83,7 @@ export const datasets = [
         key: 'value_amount',
         labelKey: 'customers.reports.fields.deal.value_amount',
         kind: 'money',
+        currencyField: 'value_currency',
         aggregations: ['sum', 'avg', 'min', 'max', 'count'],
       },
       { key: 'value_currency', labelKey: 'customers.reports.fields.deal.value_currency', kind: 'enum' },

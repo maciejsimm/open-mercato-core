@@ -85,7 +85,9 @@ export async function POST(req: Request) {
       organizationId,
       params: parsed.data.params ?? {},
       parameterDefs: parsed.data.parameters as ParameterDef[] | undefined,
-      inMemoryCap: Math.max(limit, 100),
+      // Aggregates must scan the full result set (up to the env cap); only
+      // the returned row count is trimmed to the preview limit.
+      inMemoryCap: definition.type === 'flat_list' ? Math.max(limit, 100) : undefined,
     })
     const rows = Array.isArray(out.rows) ? out.rows.slice(0, limit) : []
     return NextResponse.json({

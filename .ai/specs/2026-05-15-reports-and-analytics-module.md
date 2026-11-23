@@ -1,6 +1,6 @@
 # Reports & Analytics Module
 
-> **Status:** Phases 1–5 implemented (with gaps). Post-rebase implementation review 2026-11-23 found blocking defects — see [Implementation Review — 2026-11-23](#implementation-review--2026-11-23) and [Phase 6](#phase-6--remediation-post-rebase-review). Open Questions Q8–Q11 and Q16 gate Phase 6; Q12–Q15 gate Phase 7 (AI-assisted authoring, proposed).
+> **Status:** Phases 1–5 implemented; Phase 6 (remediation) implemented 2026-11-23 with **provisional defaults** for Q8–Q11 and Q16 (see [Phase 6 — Implementation Status](#phase-6--implementation-status-2026-11-23)). Phase 7 (AI-assisted authoring) remains proposed and not started; Q12–Q15 still open.
 
 ## TLDR
 
@@ -29,6 +29,8 @@
 ## Open Questions — Phase 6 remediation (2026-11-23)
 
 > Gate for [Phase 6](#phase-6--remediation-post-rebase-review). Q1–Q7 were resolved 2026-05-15 (see Changelog).
+>
+> **Provisional answers (2026-11-23, assumed defaults — confirm or override):** Q8 → **(a)** page `QueryEngine.query()` up to the cap; Postgres-side aggregation stays a follow-up. Q9 → **(a)** schedules run as the schedule owner with live ACL; external-email recipients require `reports.admin`. Q10 → **(a)** finish 3.6b / 4.3 / 4.5 in Phase 6. Q11 → **(a)** document coexistence (see [Coexistence with `analytics.ts`](#coexistence-with-analyticsts-f9)); convergence is a follow-up spec. Q16 → **(b)** per-report `columnFormats` limited to precision, date style, percent and compact.
 
 - **Q8 — Aggregation fix (F1):** (a) implement the spec as written: page through `QueryEngine.query()` until `OM_REPORTS_INMEMORY_CAP`, keep Postgres-side aggregation in a separate follow-up spec; or (b) pull Postgres-side aggregation (`QueryEngine` `aggregate` option) into Phase 6?
 - **Q9 — Schedule / export execution identity (F3):** (a) run as the **schedule owner** with live ACL (fail + notify if the owner lost access; external-email recipients require `reports.admin`); or (b) run **per recipient** with each recipient's own ACL (external-email recipients disallowed)?
@@ -114,6 +116,19 @@ A new `reports` module composed of:
 | Extending `dashboards` module to host analytical dashboards | Mixes "which widgets show on home" with "user-authored analytical canvas"; doubles the BC surface on a module that's already in production. |
 | User-authored datasets via UI | Would need to be a SQL view builder in disguise; runs into the same RBAC/perf problems as free-form SQL. |
 | Storing dashboard tiles as full `report` rows (snapshots) | Loses live updates; if the underlying report changes, the tile would silently diverge. We store a `reportId` reference + per-tile parameter overrides instead. |
+
+### Coexistence with `analytics.ts` (F9)
+
+`@open-mercato/shared/modules/analytics` (`<module>/analytics.ts`, used by home-dashboard widgets) predates this module and also declares sales, customers, catalog, staff and wms entities. The two registries serve different contracts and **coexist** (Q11 a):
+
+| | `analytics.ts` | `reports.ts` |
+|---|---|---|
+| Consumer | Developer-built dashboard widgets (fixed KPIs, date-bucketed series) | End-user-authored reports and dashboards |
+| Read path | Direct SQL over base tables (`tableName`, `fieldMappings`) | `QueryEngine` over `entity_indexes` (custom fields, row-level RBAC, decryption) |
+| ACL | Entity-level `requiredFeatures` | Dataset `requiredFeatures` + per-field `fieldAcl`, enforced at builder load, save and run |
+| Shape | Aggregate + date granularity | Typed report definitions (`flat_list`, `grouped`, `pivot`, `chart`, `summary`) |
+
+Shared semantics are kept aligned by convention: `reports.ts` money fields declare `currencyField`, mirroring `AnalyticsEntityTypeConfig.currencyField`, and both refuse to label a mixed-currency aggregate with one currency. Converging the registries (for example deriving `analytics.ts` mappings from `reports.ts` datasets) is out of scope here and needs its own spec.
 
 ## User Stories / Use Cases
 
@@ -1322,6 +1337,28 @@ Phased delivery; every phase ends in a working application. Each phase is broken
     - **Tests:** formatter unit tests per kind and locale (en, de, pl); timezone boundaries for `datetime`; a mixed-currency sum; and an integration test asserting a money column renders with a currency symbol in the table and in an exported XLSX cell format.
 19. **Coverage.** Expand `TC-REPORTS-001` into the e2e suites listed under Testing Strategy, plus an aggregation-correctness integration test (> 100 rows) and a role-share integration test. Translate the reports keys in de/es/pl/ko (about 68% are still English copies; `ko` is all placeholders).
 
+### Phase 6 — Implementation Status (2026-11-23)
+
+Implemented on `feat/reports-analytics-functional-reqs` (PR against `feat/reports-and-analytics-module`). Assumed defaults are marked **[default]**.
+
+| Step | Finding | Status | Notes |
+|------|---------|--------|-------|
+| 1 | F1 | Done | `readPagesUntilCap` pages `pageSize ≤ 100` up to the cap; `meta.truncated` when the engine total exceeds the rows read; `meta.scannedRows`. Preview no longer pins aggregates to 100 rows. Exports, schedules and async runs read every flat-list page (`readAllPages`). **[default Q8 a]** |
+| 2 | F6 | Done | `estimateReportRows` (`pageSize: 1` probe); aggregated reports over the cap → 202 + `executionId`. Flat lists stay paged and go async only on `mode: 'async'`. |
+| 3 | F2 | Done | `lib/access.ts` resolves role **UUIDs** from `user_roles` (tenant-checked, deleted roles excluded); JWT `roles` is never used. Routes and commands both use it. |
+| 4 | F4 | Done | `lib/feature-access.ts` delegates to `authorizeFeatures`; hand-rolled matchers removed from `folder-acl`, `field-redact`, `datasets-registry` and `commands/folder`. |
+| 5 | F3 | Done | Schedules run as `owner_user_id` (new column; legacy rows → report owner **[default]**) with live ACL; folder, dataset and field ACL are re-checked per run and fail closed. External email recipients are delivered only while the owner holds `reports.admin` **[default Q9 a]**. Schedule create/update/delete is limited to the owner or `reports.admin`. Export and async workers run as the requester; no worker uses `userFeatures: ['*']`. The CLI (`mercato reports run`) keeps operator-level access by design. |
+| 6 | F7 | Done | `userId` + `userFeatures` forwarded as `QueryOptions.extensions`; the result cache is partitioned by user and page. |
+| 7 | F8 | Done | Every list/run route fails closed through `resolveActiveOrganizationId` → `organizationScopeRequiredResponse()` (400). |
+| 8 | F5 | Done | `migrations/.snapshot-open-mercato.json` added (generated offline from entity metadata); `onCreate` on every `updated_at`; `Migration20261123120000` adds `reports_executions.result_json`, `result_meta_json`, `reports_schedules.owner_user_id`. |
+| 9 | F10 | Done **[default Q10 a]** | 3.6b: dependency-free XLSX writer (`lib/xlsx.ts`, stored zip, typed cells); no `exceljs` dependency added. 4.3: `ScheduledReportEmail` + `lib/email-attachments.ts` (base64 attachments, 10 MB aggregate cap `OM_REPORTS_EMAIL_ATTACHMENT_MAX_BYTES`, oversize formats fall back to an in-app link) + `lib/recipients.ts` (user/role recipients resolved to live users). 4.5: async results are stored on the `reports_executions` row (bounded by `OM_REPORTS_ASYNC_CAP`, default 100 000) and served by `GET /api/reports/executions/:id/download?format=` to the requester only, with folder and field ACL re-checked at download. **[default]** Results are kept in `reports_executions` rather than the attachments module, whose download path needs a reports access resolver (follow-up). New notification type `reports.schedule_failed`; `reports.export_ready` now links to the execution download. |
+| 10 | F9 | Done **[default Q11 a]** | See [Coexistence with `analytics.ts`](#coexistence-with-analyticsts-f9). |
+| 11–13 | F12–F14 | Done | `lib/definition-migrate.ts` (all type pairs + session stash), chart yFields sync, shared `measureAlias` / `effectiveChartGroupBy` (the X field is the implicit group key **[default for 12b]**), inline preview errors, pointer-based collision detection, explicit remove strip, stable chip ids. |
+| 14 | F15 | Done | `pageParent` pass-through (prior commit) + nav test. |
+| 15–17 | F16–F18 | See PR | Dashboard view mode, guided embed configurator, sidebar structure. |
+| 18 | F19 | Done **[default Q16 b]** | `lib/format.ts` `formatReportValue`, `lib/columns.ts` descriptors in `meta.columns`, measure kind inheritance, `currencyField` / `currency` / `format` DSL fields, `columnFormats`, `meta.mixedCurrencyColumns`, CSV/JSON currency column, typed XLSX cells. Schedule emails format in the default locale and the schedule timezone **[default]**. |
+| 19 | F11 | Partial | Unit tests for every step above; integration specs `TC-REPORTS-002` (aggregation over 105 rows) and `TC-REPORTS-003` (XLSX/CSV export, async dispatch). Playwright drag-and-drop and chart-preview UI tests are still to do. |
+
 ### Phase 7 — AI-assisted report authoring (proposed)
 
 **Goal:** natural-language report creation per [AI-Assisted Report Authoring](#ai-assisted-report-authoring-proposed-2026-11-23). Skeleton; finalised after Q12–Q15. Requires Phase 6 steps 1, 11 and 12.
@@ -1586,3 +1623,4 @@ Remediation is planned in [Phase 6](#phase-6--remediation-post-rebase-review). T
 - Proposed AI-assisted report authoring (`reports.report_builder` agent, read tools, client-rendered preview UI part, builder handoff, optional approval-gated create tool, relative-date DSL gap). Added as a section + Phase 7 skeleton; Open Questions Q12–Q15 raised.
 - F17 (embed configurator: free-text spot/entity ids and binding string → guided picker with parameter rows and preview) and F18 (sidebar: Reports above Dashboards, hide create pages, show Embeds/Schedules under Reports) recorded; Phase 6 steps 16–17 added.
 - F19 (no value formatting: dates, numbers, money, enums, FKs shown raw) recorded; Phase 6 step 18 adds kind-driven formatting, `currencyField`, measure kind inheritance, mixed-currency handling, one shared formatter, typed exports and column descriptors. Q16 raised.
+- Phase 6 implemented with provisional defaults Q8 a, Q9 a, Q10 a, Q11 a, Q16 b (see [Phase 6 — Implementation Status](#phase-6--implementation-status-2026-11-23)). Additive contract changes: API routes `GET /api/reports/executions/:id` and `GET /api/reports/executions/:id/download`; notification type `reports.schedule_failed`; DSL fields `currencyField`, `currency`, `format`, `columnFormats`, `ReportColumnDescriptor`, `measureAlias`, `effectiveChartGroupBy`; run-body `page`; execution `meta.columns`, `meta.mixedCurrencyColumns`, `meta.scannedRows`; DB columns `reports_executions.result_json`, `result_meta_json`, `reports_schedules.owner_user_id`. Behaviour changes: report save rejects fields the saver cannot see (403); schedule writes are limited to the owner or `reports.admin`; external schedule recipients need `reports.admin`; list routes without an organization answer 400 `organization_scope_required`.
