@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
-import { resolveReportsRequestAccess } from '../../lib/access'
+import { buildFolderAclContext, resolveReportsRequestAccess } from '../../lib/access'
+import { canShareFolder } from '../../lib/folder-acl'
+import { loadFolderRecord, loadFolderShares } from '../../commands/shared'
 import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -69,6 +71,15 @@ export async function GET(req: Request) {
     )
   }
 
+
+  const folder = await loadFolderRecord(em, parsed.data.folderId, access.tenantId, organizationId)
+  const folderShares = folder ? await loadFolderShares(em, folder.id) : []
+  if (!folder || !canShareFolder(folder, buildFolderAclContext(access, folderShares))) {
+    return NextResponse.json(
+      { error: { code: 'REPORT_FOLDER_FORBIDDEN', message: 'You cannot manage sharing for this folder' } },
+      { status: 403 },
+    )
+  }
 
   const shares = await em.find(
     ReportFolderShare,

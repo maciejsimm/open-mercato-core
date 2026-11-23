@@ -16,6 +16,7 @@ import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Folder, FolderLock, FolderPlus, Share2, Plus, ChevronRight, ChevronDown } from 'lucide-react'
 import { NewFolderDialog, type NewFolderParent } from '../components/NewFolderDialog'
+import { ShareFolderDialog } from '../components/ShareFolderDialog'
 import { cn } from '@open-mercato/shared/lib/utils'
 
 type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
@@ -29,6 +30,7 @@ type FolderRow = {
   name: string
   position: number
   permission: 'view' | 'edit'
+  canShare?: boolean
 }
 
 type ReportRow = {
@@ -114,11 +116,12 @@ type FolderNavigatorProps = {
   selectedFolderId: string | null
   onSelect: (folderId: string | null) => void
   onCreateFolder: () => void
+  onShareFolder: (folder: FolderRow) => void
   isLoading: boolean
   t: ReturnType<typeof useT>
 }
 
-function FolderNavigator({ groups, selectedFolderId, onSelect, onCreateFolder, isLoading, t }: FolderNavigatorProps) {
+function FolderNavigator({ groups, selectedFolderId, onSelect, onCreateFolder, onShareFolder, isLoading, t }: FolderNavigatorProps) {
   const [openGroups, setOpenGroups] = React.useState<Record<FolderGroupKey, boolean>>({
     mine: true,
     public: true,
@@ -184,13 +187,13 @@ function FolderNavigator({ groups, selectedFolderId, onSelect, onCreateFolder, i
                     {group.items.map((folder) => {
                       const isActive = folder.id === selectedFolderId
                       return (
-                        <li key={folder.id}>
+                        <li key={folder.id} className="group flex items-center gap-1">
                           <Button
                             type="button"
                             variant={isActive ? 'secondary' : 'ghost'}
                             size="sm"
                             className={cn(
-                              'h-auto w-full justify-start px-2 py-1 text-left',
+                              'h-auto min-w-0 flex-1 justify-start px-2 py-1 text-left',
                               isActive ? 'font-medium' : 'font-normal',
                             )}
                             onClick={() => onSelect(folder.id)}
@@ -198,6 +201,19 @@ function FolderNavigator({ groups, selectedFolderId, onSelect, onCreateFolder, i
                             <Folder className="size-4 text-muted-foreground" aria-hidden />
                             <span className="truncate">{folder.name}</span>
                           </Button>
+                          {folder.canShare ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+                              onClick={() => onShareFolder(folder)}
+                              aria-label={t('reports.list.folders.share.action', 'Share folder')}
+                              title={t('reports.list.folders.share.action', 'Share folder')}
+                            >
+                              <Share2 className="size-4" aria-hidden />
+                            </Button>
+                          ) : null}
                         </li>
                       )
                     })}
@@ -264,6 +280,7 @@ export default function ReportsListPage() {
   const groups = React.useMemo(() => groupFolders(folders), [folders])
 
   const [newFolderOpen, setNewFolderOpen] = React.useState(false)
+  const [shareFolder, setShareFolder] = React.useState<{ id: string; name: string } | null>(null)
   const newFolderParent = React.useMemo<NewFolderParent | null>(() => {
     const selected = folders.find((folder) => folder.id === selectedFolderId)
     if (!selected || selected.permission !== 'edit') return null
@@ -454,6 +471,7 @@ export default function ReportsListPage() {
             selectedFolderId={selectedFolderId}
             onSelect={(id) => { setSelectedFolderId(id); setPage(1) }}
             onCreateFolder={() => setNewFolderOpen(true)}
+            onShareFolder={(folder) => setShareFolder({ id: folder.id, name: folder.name })}
             isLoading={foldersLoading}
             t={t}
           />
@@ -506,6 +524,11 @@ export default function ReportsListPage() {
           </div>
         </div>
       </PageBody>
+      <ShareFolderDialog
+        open={shareFolder !== null}
+        onOpenChange={(open) => { if (!open) setShareFolder(null) }}
+        folder={shareFolder}
+      />
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}

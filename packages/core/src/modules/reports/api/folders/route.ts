@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { ReportFolder, ReportFolderShare } from '../../data/entities'
-import { canViewFolder, resolveFolderPermission, type FolderAclContext } from '../../lib/folder-acl'
+import { canShareFolder, canViewFolder, resolveFolderPermission, type FolderAclContext } from '../../lib/folder-acl'
+import { hasReportFeature } from '../../lib/feature-access'
 import { reportsTag, reportsErrorSchema } from '../openapi'
 
 const listQuerySchema = z
@@ -167,6 +168,7 @@ export async function GET(req: Request) {
         name: f.name,
         position: f.position,
         permission: perm,
+        canShare: hasReportFeature(userFeatures, 'reports.share') && canShareFolder(rec, ctx),
         createdAt: f.createdAt?.toISOString() ?? null,
         updatedAt: f.updatedAt?.toISOString() ?? null,
       }
