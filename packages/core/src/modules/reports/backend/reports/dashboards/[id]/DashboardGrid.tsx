@@ -167,4 +167,3 @@ function GridCell<T extends GridTile>({ tile, editing, dragging, rowHeight, gap,
   )
 }
 
-export default DashboardGrid

@@ -161,4 +161,3 @@ export function TileBindingsDialog({
   )
 }
 
-export default TileBindingsDialog
