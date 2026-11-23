@@ -14,7 +14,8 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { Folder, FolderLock, Share2, Plus, ChevronRight, ChevronDown } from 'lucide-react'
+import { Folder, FolderLock, FolderPlus, Share2, Plus, ChevronRight, ChevronDown } from 'lucide-react'
+import { NewFolderDialog, type NewFolderParent } from '../components/NewFolderDialog'
 import { cn } from '@open-mercato/shared/lib/utils'
 
 type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
@@ -112,11 +113,12 @@ type FolderNavigatorProps = {
   groups: FolderGroup[]
   selectedFolderId: string | null
   onSelect: (folderId: string | null) => void
+  onCreateFolder: () => void
   isLoading: boolean
   t: ReturnType<typeof useT>
 }
 
-function FolderNavigator({ groups, selectedFolderId, onSelect, isLoading, t }: FolderNavigatorProps) {
+function FolderNavigator({ groups, selectedFolderId, onSelect, onCreateFolder, isLoading, t }: FolderNavigatorProps) {
   const [openGroups, setOpenGroups] = React.useState<Record<FolderGroupKey, boolean>>({
     mine: true,
     public: true,
@@ -130,6 +132,17 @@ function FolderNavigator({ groups, selectedFolderId, onSelect, isLoading, t }: F
     <aside className="w-full shrink-0 rounded-md border border-border bg-card p-3 lg:w-72">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-overline text-muted-foreground">{t('reports.list.folders.title', 'Folders')}</h2>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-2"
+          onClick={onCreateFolder}
+          aria-label={t('reports.list.folders.create.title', 'New folder')}
+        >
+          <FolderPlus className="size-4" aria-hidden />
+          <span className="text-xs">{t('reports.list.folders.create.button', 'New')}</span>
+        </Button>
       </div>
       <Button
         type="button"
@@ -249,6 +262,17 @@ export default function ReportsListPage() {
   }, [scopeVersion, reloadToken, t])
 
   const groups = React.useMemo(() => groupFolders(folders), [folders])
+
+  const [newFolderOpen, setNewFolderOpen] = React.useState(false)
+  const newFolderParent = React.useMemo<NewFolderParent | null>(() => {
+    const selected = folders.find((folder) => folder.id === selectedFolderId)
+    if (!selected || selected.permission !== 'edit') return null
+    return { id: selected.id, name: selected.name, kind: selected.kind }
+  }, [folders, selectedFolderId])
+  const handleFolderCreated = React.useCallback((folderId: string | null) => {
+    setReloadToken((token) => token + 1)
+    if (folderId) setSelectedFolderId(folderId)
+  }, [])
 
   const queryParams = React.useMemo(() => {
     const params = new URLSearchParams()
@@ -429,6 +453,7 @@ export default function ReportsListPage() {
             groups={groups}
             selectedFolderId={selectedFolderId}
             onSelect={(id) => { setSelectedFolderId(id); setPage(1) }}
+            onCreateFolder={() => setNewFolderOpen(true)}
             isLoading={foldersLoading}
             t={t}
           />
@@ -481,6 +506,12 @@ export default function ReportsListPage() {
           </div>
         </div>
       </PageBody>
+      <NewFolderDialog
+        open={newFolderOpen}
+        onOpenChange={setNewFolderOpen}
+        parent={newFolderParent}
+        onCreated={handleFolderCreated}
+      />
       {ConfirmDialogElement}
     </Page>
   )

@@ -297,3 +297,32 @@ describe('XLSX hardening', () => {
   })
 })
 
+
+describe('Enum natural order', () => {
+  const paidFirst = [
+    { id: 'a', status: 'paid', qty: 1 },
+    { id: 'b', status: 'open', qty: 2 },
+  ]
+  test('chart X axis follows declared enum option order', async () => {
+    const { engine } = pagingEngine(paidFirst)
+    const out = await executeReport(engine, {
+      ...baseInput,
+      definition: {
+        type: 'chart',
+        chart: { type: 'bar', xField: 'status', yFields: ['sum_qty'] },
+        filters: [],
+        measures: [{ field: 'qty', aggregation: 'sum' }],
+      },
+    })
+    expect(out.rows.map((r) => r.status)).toEqual(['open', 'paid'])
+  })
+
+  test('pivot rows follow declared enum option order', async () => {
+    const { engine } = pagingEngine(paidFirst.map((r) => ({ ...r, currency: 'EUR' })))
+    const out = await executeReport(engine, {
+      ...baseInput,
+      definition: { type: 'pivot', rows: ['status'], cols: ['currency'], value: { field: 'qty', aggregation: 'sum' }, filters: [] },
+    })
+    expect(out.rows.map((r) => r.status)).toEqual(['open', 'paid'])
+  })
+})

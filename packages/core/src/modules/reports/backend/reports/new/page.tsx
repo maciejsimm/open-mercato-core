@@ -54,7 +54,7 @@ export default function ReportsNewPage() {
     const items = Array.isArray(call.result?.items) ? call.result!.items! : []
     return items.map((dataset) => ({
       value: dataset.id,
-      label: `${dataset.id} — ${t(dataset.labelKey, dataset.id)}`,
+      label: `${t(dataset.labelKey, dataset.id)} (${dataset.id})`,
     }))
   }, [t])
 

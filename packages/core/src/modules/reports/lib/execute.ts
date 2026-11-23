@@ -448,6 +448,23 @@ function buildEnumOrderMap(dataset: Dataset): Map<string, (v: unknown) => number
   return map
 }
 
+/**
+ * Default ascending sort over the leading enum keys (declared option order),
+ * used when a report does not specify its own sort. Non-enum keys keep the
+ * aggregator's first-seen order.
+ */
+function naturalEnumSort(
+  keys: readonly string[],
+  enumOrder: Map<string, (v: unknown) => number>,
+): DslSort[] | undefined {
+  const sort: DslSort[] = []
+  for (const key of keys) {
+    if (!enumOrder.has(key)) break
+    sort.push({ field: key, dir: 'asc' })
+  }
+  return sort.length ? sort : undefined
+}
+
 function sortRows(
   rows: Row[],
   sort: DslSort[] | undefined,
@@ -552,11 +569,7 @@ export async function executeReport(
         // and the first groupBy key is an enum with declared options. This
         // is what users typically expect (status: open → won → lost), not
         // alphabetical (lost → open → won).
-        const effectiveSort = def.sort?.length
-          ? def.sort
-          : (def.groupBy[0] && enumOrder.has(def.groupBy[0])
-              ? [{ field: def.groupBy[0], dir: 'asc' as const }]
-              : undefined)
+        const effectiveSort = def.sort?.length ? def.sort : naturalEnumSort(def.groupBy, enumOrder)
         rows = sortRows(rows, effectiveSort, enumOrder)
         limit = def.limit
         outFields = [
@@ -584,12 +597,18 @@ export async function executeReport(
           return
         }
         const valueMeasure: MeasureExpr = def.value
-        const pivot = aggregatePivot({
+        const rawPivot = aggregatePivot({
           rows: rawRows,
           rowKeys: def.rows,
           colKeys: def.cols,
           value: valueMeasure,
         })
+        // Natural order for enum axes: declared option order, not first-seen.
+        const pivot = {
+          ...rawPivot,
+          rowHeaders: sortRows([...rawPivot.rowHeaders], naturalEnumSort(def.rows, enumOrder), enumOrder),
+          colHeaders: sortRows([...rawPivot.colHeaders], naturalEnumSort(def.cols, enumOrder), enumOrder),
+        }
         rows = pivotToWideRows(pivot)
         const colHeaderLabels = pivot.colHeaders.map((h) =>
           Object.values(h).map((v) => (v === null || v === undefined ? '∅' : String(v))).join('|'),
@@ -605,6 +624,7 @@ export async function executeReport(
           groupBy: chartGroupBy,
           measures: def.measures ?? [],
         })
+        rows = sortRows(rows, naturalEnumSort(chartGroupBy, enumOrder), enumOrder)
         limit = def.limit
         outFields = [
           ...chartGroupBy,
