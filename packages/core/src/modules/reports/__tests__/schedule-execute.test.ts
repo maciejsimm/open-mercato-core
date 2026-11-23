@@ -22,11 +22,11 @@ jest.mock('@open-mercato/shared/lib/i18n/server', () => ({ loadDictionary: jest.
 jest.mock('../emails/ScheduledReportEmail', () => ({ ScheduledReportEmail: () => null }))
 jest.mock('../data/entities', () => ({ ReportExecution: class ReportExecution {}, ReportSchedule: class ReportSchedule {} }))
 
-import handle, { MAX_SCHEDULE_FAILURES } from '../workers/reports-schedule-execute'
+import handle, { MAX_SCHEDULE_FAILURES, SCHEDULE_RETRY_BASE_MS, computeRetryAt } from '../workers/reports-schedule-execute'
 
 type ScheduleRow = Record<string, unknown> & { failureCount: number; enabled: boolean; nextRunAt: Date | null }
 
-function makeContext(schedule: ScheduleRow) {
+function makeContext(schedule: ScheduleRow, claimRows = 1) {
   const created: Record<string, unknown>[] = []
   const em = {
     fork: () => em,
@@ -38,6 +38,7 @@ function makeContext(schedule: ScheduleRow) {
     }),
     persist: jest.fn(),
     flush: jest.fn().mockResolvedValue(undefined),
+    nativeUpdate: jest.fn().mockResolvedValue(claimRows),
   }
   const ctx = {
     resolve: (name: string) => {
@@ -46,7 +47,7 @@ function makeContext(schedule: ScheduleRow) {
       throw new Error(`unexpected resolve ${name}`)
     },
   }
-  return { ctx, created }
+  return { ctx, created, em }
 }
 
 function schedule(overrides: Partial<ScheduleRow> = {}): ScheduleRow {
@@ -133,5 +134,44 @@ describe('F3 — schedules run as the owner with live ACL', () => {
     const { ctx } = makeContext(schedule())
     await handle(job, ctx)
     expect(resolveRecipientEmailsMock.mock.calls[0][3]).toEqual({ allowExternal: true })
+  })
+
+  test('a run whose claim is lost (concurrent worker) does nothing', async () => {
+    const row = schedule()
+    const { ctx, created } = makeContext(row, 0)
+    await handle(job, ctx)
+    expect(created).toHaveLength(0)
+    expect(executeReportMock).not.toHaveBeenCalled()
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  test('the claim compares against the next_run_at value that was read', async () => {
+    const row = schedule()
+    const original = row.nextRunAt
+    const { ctx, em } = makeContext(row)
+    await handle(job, ctx)
+    expect(em.nativeUpdate.mock.calls[0][1]).toMatchObject({ id: 'sch_1', nextRunAt: original })
+  })
+
+  test('a failed run is retried with backoff instead of on the next tick', async () => {
+    canRunReportMock.mockResolvedValue(false)
+    const row = schedule()
+    const { ctx } = makeContext(row)
+    const before = Date.now()
+    await handle(job, ctx)
+    expect(row.enabled).toBe(true)
+    expect(row.nextRunAt?.getTime() ?? 0).toBeGreaterThanOrEqual(before + SCHEDULE_RETRY_BASE_MS - 1000)
+  })
+})
+
+describe('computeRetryAt', () => {
+  const now = new Date('2026-01-01T00:00:00Z')
+  test('doubles per consecutive failure', () => {
+    expect(computeRetryAt(now, 1, null).getTime() - now.getTime()).toBe(SCHEDULE_RETRY_BASE_MS)
+    expect(computeRetryAt(now, 2, null).getTime() - now.getTime()).toBe(2 * SCHEDULE_RETRY_BASE_MS)
+  })
+  test('never later than the next regular run', () => {
+    const regular = new Date(now.getTime() + 60_000)
+    expect(computeRetryAt(now, 2, regular)).toEqual(regular)
   })
 })

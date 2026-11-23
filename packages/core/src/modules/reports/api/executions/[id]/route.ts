@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { ReportExecution } from '../../../data/entities'
 import { resolveReportsRequestAccess } from '../../../lib/access'
 import { isReportsAdmin } from '../../../lib/folder-acl'
@@ -28,11 +29,13 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
   const resolved = await resolveReportsRequestAccess(req)
   if (!resolved.ok) return resolved.response
   const { access, em } = resolved
-  const execution = await em.findOne(ReportExecution, {
-    id: executionId,
-    tenantId: access.tenantId,
-    organizationId: access.organizationId,
-  } as Record<string, unknown>)
+  const execution = await findOneWithDecryption(
+    em,
+    ReportExecution,
+    { id: executionId, tenantId: access.tenantId, organizationId: access.organizationId } as Record<string, unknown>,
+    {},
+    { tenantId: access.tenantId, organizationId: access.organizationId },
+  )
   if (!execution || (execution.requestedByUserId !== access.userId && !isReportsAdmin(access.userFeatures))) {
     return NextResponse.json({ error: { code: 'REPORT_EXECUTION_NOT_FOUND', message: 'Execution not found' } }, { status: 404 })
   }

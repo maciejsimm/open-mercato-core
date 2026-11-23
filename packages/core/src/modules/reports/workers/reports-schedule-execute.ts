@@ -39,6 +39,20 @@ type HandlerContext = {
 export const MAX_SCHEDULE_FAILURES = 3
 const PREVIEW_ROWS = 10
 
+/** Base retry delay; doubles per consecutive failure (15 min, 30 min, …). */
+export const SCHEDULE_RETRY_BASE_MS = 15 * 60 * 1000
+
+/**
+ * Exponential backoff for a failed run, never later than the next regular
+ * occurrence (a regular run is itself the retry).
+ */
+export function computeRetryAt(now: Date, failureCount: number, nextRegularRun: Date | null): Date {
+  const delay = SCHEDULE_RETRY_BASE_MS * 2 ** Math.max(0, failureCount - 1)
+  const retry = new Date(now.getTime() + delay)
+  if (nextRegularRun && nextRegularRun.getTime() < retry.getTime()) return nextRegularRun
+  return retry
+}
+
 export class ScheduleRunError extends Error {
   constructor(readonly code: string) {
     super(code)
@@ -77,8 +91,10 @@ function buildPreviewTable(
  * `MAX_SCHEDULE_FAILURES`). External email recipients are delivered only
  * while the owner holds `reports.admin`.
  *
- * Idempotent on `scheduleId + nextRunAt`: a job whose `runAt` predates the
- * stored `nextRunAt` (another worker already ran it) exits immediately.
+ * Exactly-once per occurrence: the worker claims the run by atomically
+ * advancing `next_run_at` from the value it read; a concurrent or
+ * re-enqueued job loses the claim and exits. Failures retry with
+ * exponential backoff (`computeRetryAt`).
  */
 export default async function handle(
   job: { payload: ScheduleExecuteJob },
@@ -100,7 +116,20 @@ export default async function handle(
     if (schedule.nextRunAt.getTime() > jobRunAt) return
   }
 
+  // Atomic claim: advance next_run_at only if it still holds the value we
+  // read. A concurrent worker (or a re-enqueue from the next runner tick)
+  // loses the race and exits, so a slow run is never delivered twice.
   const now = new Date()
+  const claimedFrom = schedule.nextRunAt ?? null
+  const parsedCadence = parseCadence(schedule.cadence)
+  const nextRegularRun = parsedCadence ? computeNextRunAt(parsedCadence, now, schedule.timezone) : null
+  const claimed = await em.nativeUpdate(
+    ReportSchedule,
+    { id: schedule.id, tenantId, organizationId, nextRunAt: claimedFrom } as Record<string, unknown>,
+    { nextRunAt: nextRegularRun } as Record<string, unknown>,
+  )
+  if (claimed === 0) return
+  schedule.nextRunAt = nextRegularRun
   const report = await loadScopedReport(em, schedule.reportId, scope)
   const ownerUserId = schedule.ownerUserId ?? report?.ownerUserId ?? null
   const params = (schedule.paramsJson as Record<string, unknown> | undefined) ?? {}
@@ -192,12 +221,8 @@ export default async function handle(
     execution.completedAt = new Date()
     execution.rowCount = result.rows.length
     execution.durationMs = Date.now() - started
-    execution.resultJson = result.rows
-    execution.resultMetaJson = { ...result.meta, total: result.total, definition }
     schedule.failureCount = 0
     schedule.lastRunAt = new Date()
-    const parsedCadence = parseCadence(schedule.cadence)
-    schedule.nextRunAt = parsedCadence ? computeNextRunAt(parsedCadence, new Date(), schedule.timezone) : null
     await em.flush()
 
     await emitReportsEvent('reports.schedule.delivered', {
@@ -235,6 +260,8 @@ export default async function handle(
     if (exhausted) {
       schedule.enabled = false
       schedule.nextRunAt = null
+    } else {
+      schedule.nextRunAt = computeRetryAt(new Date(), schedule.failureCount, nextRegularRun)
     }
     await em.flush()
     if (exhausted && ownerUserId) {
@@ -251,9 +278,9 @@ export default async function handle(
         scope,
       )
     }
-    // No rethrow: the schedule stays due (nextRunAt unchanged), so the next
-    // runner tick retries it; `failureCount` bounds retries without the
-    // queue duplicating execution rows.
+    // No rethrow: the retry is scheduled through next_run_at with
+    // exponential backoff; `failureCount` bounds retries without the queue
+    // duplicating execution rows.
     logger.warn('Scheduled report run failed', { scheduleId, code, failureCount: schedule.failureCount, err })
   }
 }

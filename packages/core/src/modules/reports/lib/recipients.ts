@@ -24,8 +24,11 @@ function readRecipients(raw: unknown): ScheduleRecipientInput[] {
 
 /**
  * Resolve schedule recipients to distinct email addresses within the
- * tenant. `user` and `role` recipients resolve through live user/role
- * membership (deleted users and roles drop out); `email` recipients are
+ * schedule's organization. `user` and `role` recipients resolve through
+ * live user/role membership (deleted users and roles drop out); users whose
+ * home organization is a different organization are excluded, so one
+ * organization's data is never mailed to another's users. Tenant-wide
+ * users (no home organization) are included. `email` recipients are
  * included only when `allowExternal` (owner holds `reports.admin`).
  */
 export async function resolveRecipientEmails(
@@ -71,6 +74,8 @@ export async function resolveRecipientEmails(
       scope,
     )
     for (const user of users) {
+      const homeOrganizationId = (user as { organizationId?: string | null }).organizationId ?? null
+      if (homeOrganizationId && homeOrganizationId !== scope.organizationId) continue
       const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : ''
       if (email.includes('@')) emails.add(email)
     }

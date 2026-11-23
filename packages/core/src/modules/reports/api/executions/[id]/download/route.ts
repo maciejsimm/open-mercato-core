@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { ReportDefinition, ReportColumnDescriptor } from '@open-mercato/shared/modules/reports/dsl'
 import { ReportExecution } from '../../../../data/entities'
 import { resolveReportsRequestAccess } from '../../../../lib/access'
@@ -48,11 +49,13 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
   const resolved = await resolveReportsRequestAccess(req)
   if (!resolved.ok) return resolved.response
   const { access, em } = resolved
-  const execution = await em.findOne(ReportExecution, {
-    id: executionId,
-    tenantId: access.tenantId,
-    organizationId: access.organizationId,
-  } as Record<string, unknown>)
+  const execution = await findOneWithDecryption(
+    em,
+    ReportExecution,
+    { id: executionId, tenantId: access.tenantId, organizationId: access.organizationId } as Record<string, unknown>,
+    {},
+    { tenantId: access.tenantId, organizationId: access.organizationId },
+  )
   if (!execution || execution.requestedByUserId !== access.userId) return notFound()
   if (execution.status !== 'completed' || !execution.resultJson || !execution.resultMetaJson) {
     return NextResponse.json(

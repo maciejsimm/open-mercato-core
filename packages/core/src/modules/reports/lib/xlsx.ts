@@ -104,7 +104,8 @@ function escapeXml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
 }
 
 function columnLetter(index: number): string {
@@ -127,8 +128,14 @@ export function toExcelSerial(date: Date): number {
 
 function toNumeric(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value === 'bigint') return Number(value)
-  if (typeof value === 'string' && /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(value.trim())) return Number(value)
+  if (typeof value === 'bigint') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  if (typeof value === 'string' && /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(value.trim())) {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
   return null
 }
 

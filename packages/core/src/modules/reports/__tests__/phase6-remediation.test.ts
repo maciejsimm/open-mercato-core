@@ -280,3 +280,20 @@ describe('Q10 / 3.6b — XLSX export', () => {
     expect(Buffer.isBuffer(xlsx.body)).toBe(true)
   })
 })
+
+describe('XLSX hardening', () => {
+  test('overflowing numbers fall back to text and invalid XML characters are stripped', () => {
+    const buffer = buildXlsx({
+      columns: [
+        { key: 'n', header: 'N', kind: 'number' },
+        { key: 's', header: 'S', kind: 'string' },
+      ],
+      rows: [{ n: '1e400', s: 'a\uD800b\uFFFEc' }],
+    })
+    const sheet = readStoredZip(buffer)['xl/worksheets/sheet1.xml']
+    expect(sheet).not.toContain('Infinity</v>')
+    expect(sheet).toContain('<t xml:space="preserve">1e400</t>')
+    expect(sheet).toContain('<t xml:space="preserve">abc</t>')
+  })
+})
+
