@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { resolveReportsRequestAccess } from '../../../../lib/access'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ParameterDef, ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
 import { Report, ReportDashboard, ReportFolder, ReportFolderShare } from '../../../../data/entities'
@@ -30,13 +28,10 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
     )
   }
 
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } },
-      { status: 401 },
-    )
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   let body: unknown = {}
   try {
@@ -52,20 +47,13 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
     )
   }
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
-  const rbac = container.resolve('rbacService') as RbacService
 
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   const dashboard = await em.findOne(ReportDashboard, {
     id: dashboardId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!dashboard) {
@@ -77,8 +65,8 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
 
   const folder = await em.findOne(ReportFolder, {
     id: dashboard.folderId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!folder) {
@@ -89,8 +77,8 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   }
   const shares = await em.find(ReportFolderShare, { folderId: folder.id } as Record<string, unknown>)
   const aclCtx: FolderAclContext = {
-    userId: auth.sub,
-    roleIds: new Set<string>(Array.isArray(auth.roles) ? auth.roles : []),
+    userId: access.userId,
+    roleIds: access.roleIds,
     userFeatures,
     shares: shares.map((s) => ({
       id: s.id,
@@ -135,8 +123,7 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
     cacheService = null
   }
   const now = new Date()
-  const tenantId = auth.tenantId
-  const organizationId = auth.orgId ?? ''
+  const tenantId = access.tenantId
 
   const tilePromises = layout.tiles.map((tile) =>
     runTile(tile, {

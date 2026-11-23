@@ -126,7 +126,9 @@ export async function executeReportCached(
     return { ...result, meta: { ...result.meta, cached: false } }
   }
 
-  const fingerprint = buildUserFeatureFingerprint(input.userFeatures)
+  // Row-level RBAC (query `extensions`) can depend on the running user, and
+  // flat lists are paged — both must partition the cache.
+  const fingerprint = `${buildUserFeatureFingerprint(input.userFeatures)}|u:${input.userId ?? ''}|p:${input.page ?? 1}`
   const key = buildReportCacheKey({
     reportId: options.reportId,
     tenantId: input.tenantId,

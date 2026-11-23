@@ -59,6 +59,12 @@ export type ExecutionInput = {
   userId?: string
   /** Flat-list page (1-based). Aggregated reports always read every page up to the cap. */
   page?: number
+  /**
+   * Flat-list only: read every page up to the cap instead of one page.
+   * Used by exports, schedules and async runs, which must deliver the full
+   * result set, not the first screen.
+   */
+  readAllPages?: boolean
 }
 
 export type ExecutionResult = {
@@ -87,7 +93,14 @@ export type AsyncDispatch = {
   cap: number
 }
 
-function readEnvCap(): number {
+/** Row cap for async runs (`OM_REPORTS_ASYNC_CAP`, default 100 000). */
+export function readAsyncCap(): number {
+  const raw = process.env.OM_REPORTS_ASYNC_CAP
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 100_000
+}
+
+export function readEnvCap(): number {
   const raw = process.env.OM_REPORTS_INMEMORY_CAP
   if (!raw) return 25_000
   const n = Number(raw)
@@ -112,6 +125,7 @@ export async function executeFlatList(
   if (input.definition.type !== 'flat_list') {
     throw new Error(`executeFlatList only supports flat_list (got '${input.definition.type}')`)
   }
+  const flatDefinition = input.definition
   const profiler = createReportsProfiler(input.definition, input.dataset)
   try {
     // Step 1: field-ACL — re-resolved against the running user.
@@ -141,14 +155,30 @@ export async function executeFlatList(
 
     // Step 4: run + measure.
     const started = Date.now()
-    const result = await profiler.measure('query.execute', () =>
-      queryEngine.query(input.dataset.entityType, opts),
-    )
+    let rows: Record<string, unknown>[]
+    let total: number
+    if (input.readAllPages) {
+      const read = await profiler.measure('query.execute', () =>
+        readPagesUntilCap(
+          queryEngine,
+          input.dataset.entityType,
+          opts,
+          typeof flatDefinition.limit === 'number' ? Math.min(cap, flatDefinition.limit) : cap,
+        ),
+      )
+      rows = read.rows
+      total = read.total ?? rows.length
+    } else {
+      const result = await profiler.measure('query.execute', () =>
+        queryEngine.query(input.dataset.entityType, opts),
+      )
+      rows = result.items as Record<string, unknown>[]
+      total = typeof result.total === 'number' ? result.total : rows.length
+    }
     const duration_ms = Date.now() - started
-
-    const rows = result.items as Record<string, unknown>[]
-    const total = typeof result.total === 'number' ? result.total : rows.length
-    const truncated = total > cap
+    const truncated = input.readAllPages
+      ? total > rows.length && (typeof flatDefinition.limit !== 'number' || rows.length < flatDefinition.limit)
+      : total > cap
 
     profiler.end({ rows: rows.length, total, truncated, cap })
     return {

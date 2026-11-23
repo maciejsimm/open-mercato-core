@@ -1,15 +1,19 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ParameterDef, ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
-import type { CrudExportFormat } from '@open-mercato/shared/lib/crud/exporters'
-import { Report } from '../data/entities'
+import { createLogger } from '@open-mercato/shared/lib/logger'
+import { ReportExecution, ReportSchedule } from '../data/entities'
+import { resolveAccessForUser } from '../lib/access'
+import { hashParams } from '../lib/async-run'
 import { loadDataset } from '../lib/datasets-registry'
-import { runReportExport } from '../lib/export'
+import { executeReport } from '../lib/execute'
+import { isReportExportFormat } from '../lib/export'
 import { FieldAclDeniedError } from '../lib/field-redact'
-import {
-  REPORTS_EXPORT_BUILD_QUEUE,
-  type ExportBuildJob,
-} from '../lib/queues'
+import { notifyReportsUser } from '../lib/notify'
+import { canRunReport, loadScopedReport } from '../lib/report-access'
+import { REPORTS_EXPORT_BUILD_QUEUE, type ExportBuildJob } from '../lib/queues'
+
+const logger = createLogger('reports').child({ component: 'workers/export-build' })
 
 export const metadata = {
   queue: REPORTS_EXPORT_BUILD_QUEUE,
@@ -21,78 +25,89 @@ type HandlerContext = {
   resolve: <T = unknown>(name: string) => T
 }
 
-const SUPPORTED_FORMATS: CrudExportFormat[] = ['csv', 'json', 'xml', 'markdown']
-
 /**
- * Export build worker — runs a single report through the executor + shared
- * serializer and produces a binary artifact ready for delivery.
+ * Export build worker — runs a report for a background export and stores
+ * the result on a `reports_executions` row; the requester gets a
+ * `reports.export_ready` notification whose action downloads it in the
+ * requested format (`/api/reports/executions/:id/download`).
  *
- * Step 4.3 wires the email-attachments path that consumes the produced
- * artifact; Step 4.5 wires the attachments-module persistence. For now
- * the worker exercises the full executor + serializer pipeline so the
- * schedule-execute worker can confidently enqueue export jobs.
- *
- * XLSX support depends on the deferred `exceljs` dependency (Step 3.6b).
- * Until that lands the worker logs a "skipped — xlsx-not-yet-supported"
- * notice rather than throwing.
+ * Runs as `requestedByUserId` (or the schedule owner when only
+ * `scheduleId` is given) with live ACL. Never runs with a wildcard
+ * identity: a job without a resolvable principal is dropped.
  */
 export default async function handle(
   job: { payload: ExportBuildJob },
   ctx: HandlerContext,
 ): Promise<void> {
-  const { reportId, tenantId, organizationId, format, scheduleId, params } = job.payload
-  if (!SUPPORTED_FORMATS.includes(format as CrudExportFormat)) {
-    if (typeof console !== 'undefined') {
-      console.info('[reports/export-build] skipped — format not yet supported', { format, reportId, scheduleId })
-    }
-    return
-  }
-
+  const { reportId, tenantId, organizationId, format, scheduleId, params, requestedByUserId } = job.payload
+  if (!isReportExportFormat(format)) return
+  const scope = { tenantId, organizationId }
   const em = (ctx.resolve('em') as EntityManager).fork()
-  const report = await em.findOne(Report, {
-    id: reportId,
-    tenantId,
-    organizationId,
-    deletedAt: null,
-  } as Record<string, unknown>)
+  const report = await loadScopedReport(em, reportId, scope)
   if (!report) return
 
-  const userFeatures = new Set<string>(['*'])
-  const dataset = await loadDataset(report.datasetId, userFeatures)
+  let principal = requestedByUserId ?? null
+  if (!principal && scheduleId) {
+    const schedule = await em.findOne(ReportSchedule, { id: scheduleId, tenantId, organizationId } as Record<string, unknown>)
+    principal = schedule?.ownerUserId ?? report.ownerUserId ?? null
+  }
+  if (!principal) {
+    logger.warn('Export job without a principal; skipped', { reportId, scheduleId })
+    return
+  }
+  const access = await resolveAccessForUser(ctx, em, principal, scope)
+  if (!(await canRunReport(em, report, access))) return
+  const dataset = await loadDataset(report.datasetId, access.userFeatures)
   if (!dataset) return
 
-  const queryEngine = ctx.resolve('queryEngine') as QueryEngine
   const definition = report.definitionJson as ReportDefinition
-  const parameterDefs = (report.parametersJson as ParameterDef[] | undefined) ?? undefined
-
+  const started = Date.now()
   try {
-    const artifact = await runReportExport(
-      queryEngine,
+    const result = await executeReport(ctx.resolve('queryEngine') as QueryEngine, {
+      dataset,
+      definition,
+      userFeatures: access.userFeatures,
+      userId: access.userId,
+      tenantId,
+      organizationId,
+      params: params ?? {},
+      parameterDefs: (report.parametersJson as ParameterDef[] | undefined) ?? undefined,
+      readAllPages: true,
+    })
+    const execution = em.create(ReportExecution, {
+      organizationId,
+      tenantId,
+      reportId,
+      scheduleId: scheduleId ?? null,
+      requestedByUserId: principal,
+      paramsHash: hashParams(params),
+      status: 'completed',
+      startedAt: new Date(started),
+      completedAt: new Date(),
+      rowCount: result.rows.length,
+      durationMs: Date.now() - started,
+      resultJson: result.rows,
+      resultMetaJson: { ...result.meta, total: result.total, definition, format },
+      createdAt: new Date(),
+    })
+    em.persist(execution)
+    await em.flush()
+    await notifyReportsUser(
+      ctx,
+      'reports.export_ready',
       {
-        dataset,
-        definition,
-        userFeatures,
-        tenantId,
-        organizationId,
-        params: params ?? {},
-        parameterDefs,
+        recipientUserId: principal,
+        bodyVariables: { reportName: report.name },
+        sourceEntityType: 'reports:execution',
+        sourceEntityId: execution.id,
+        linkHref: `/api/reports/executions/${execution.id}/download?format=${format}`,
+        groupKey: `reports:export:${execution.id}`,
       },
-      format as CrudExportFormat,
+      scope,
     )
-    if (typeof console !== 'undefined') {
-      console.info('[reports/export-build] completed', {
-        reportId,
-        scheduleId,
-        format,
-        bytes: artifact.body.length,
-        truncated: artifact.truncated,
-      })
-    }
   } catch (err) {
     if (err instanceof FieldAclDeniedError) {
-      if (typeof console !== 'undefined') {
-        console.warn('[reports/export-build] field-ACL denied', { reportId, scheduleId, format, fields: err.fields })
-      }
+      logger.warn('Export denied by field ACL', { reportId, fields: err.fields })
       return
     }
     throw err

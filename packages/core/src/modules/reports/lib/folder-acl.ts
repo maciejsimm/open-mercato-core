@@ -1,3 +1,5 @@
+import { hasReportFeature } from './feature-access'
+
 export type ReportFolderRecord = {
   id: string
   kind: 'private' | 'public'
@@ -23,17 +25,8 @@ export type FolderAclContext = {
   shares: ReadonlyArray<ReportFolderShareRecord>
 }
 
-function hasFeature(features: ReadonlySet<string>, required: string): boolean {
-  if (features.has(required)) return true
-  const parts = required.split('.')
-  for (let i = parts.length - 1; i > 0; i--) {
-    if (features.has(parts.slice(0, i).join('.') + '.*')) return true
-  }
-  return features.has('*')
-}
-
 export function isReportsAdmin(features: ReadonlySet<string>): boolean {
-  return hasFeature(features, 'reports.admin')
+  return hasReportFeature(features, 'reports.admin')
 }
 
 function principalMatches(
@@ -54,7 +47,7 @@ function principalMatches(
  */
 export function canViewFolder(folder: ReportFolderRecord, ctx: FolderAclContext): boolean {
   if (isReportsAdmin(ctx.userFeatures)) return true
-  if (!hasFeature(ctx.userFeatures, 'reports.view')) return false
+  if (!hasReportFeature(ctx.userFeatures, 'reports.view')) return false
   if (folder.kind === 'public') return true
   if (folder.ownerUserId === ctx.userId) return true
   return ctx.shares.some((s) => s.folderId === folder.id && principalMatches(s, ctx))

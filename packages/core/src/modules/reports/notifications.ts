@@ -53,12 +53,32 @@ export const notificationTypes: NotificationTypeDefinition[] = [
         id: 'download',
         labelKey: 'reports.notifications.actions.downloadExport',
         variant: 'default',
-        href: '{attachmentDownloadUrl}',
+        href: '/api/reports/executions/{sourceEntityId}/download',
         icon: 'download',
       },
     ],
     primaryActionId: 'download',
     expiresAfterHours: 168,
+  },
+  {
+    type: 'reports.schedule_failed',
+    module: 'reports',
+    titleKey: 'reports.notifications.schedule_failed.title',
+    bodyKey: 'reports.notifications.schedule_failed.body',
+    icon: 'alert-triangle',
+    severity: 'warning',
+    actions: [
+      {
+        id: 'view',
+        labelKey: 'reports.notifications.actions.viewSchedule',
+        variant: 'outline',
+        href: '/backend/reports/schedules',
+        icon: 'external-link',
+      },
+    ],
+    primaryActionId: 'view',
+    linkHref: '/backend/reports/schedules',
+    expiresAfterHours: 336,
   },
 ]
 

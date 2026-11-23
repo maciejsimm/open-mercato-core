@@ -353,6 +353,7 @@ export type ReportMoveInput = z.infer<typeof reportMoveSchema>
 export const reportRunSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
   mode: z.enum(['sync', 'async']).optional(),
+  page: z.number().int().min(1).max(10_000).optional(),
 })
 export type ReportRunInput = z.infer<typeof reportRunSchema>
 
