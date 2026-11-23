@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { measureAlias } from '@open-mercato/shared/modules/reports/dsl'
 import { isKnownEmbedSpot } from '../lib/embed-spots'
+import { isValidCadence, isValidTimeZone } from '../lib/schedule-cadence'
 
 const uuid = () => z.string().uuid()
 
@@ -506,20 +507,19 @@ export type EmbedDeleteInput = z.infer<typeof embedDeleteSchema>
 
 /**
  * Cadence formats recognized by `parseCadence` and the workers:
- *  - `weekly:<dow>@<HH:MM>`   e.g. `weekly:mon@09:00`
- *  - `monthly:<day>@<HH:MM>`  e.g. `monthly:1@09:00` (day 1..28)
- *  - `cron:<expression>`      free-form cron expression evaluated by the worker
+ *  - `daily@<HH:MM>`                e.g. `daily@09:00`
+ *  - `weekly:<dow>[,<dow>…]@<HH:MM>` e.g. `weekly:mon@09:00`, `weekly:mon,wed@09:00`
+ *  - `monthly:<day>@<HH:MM>`        e.g. `monthly:1@09:00` (day 1..28 or `last`)
+ *  - `cron:<expression>`            standard 5-field cron expression
  */
-const cadenceWeeklyPattern = /^weekly:(mon|tue|wed|thu|fri|sat|sun)@([01]\d|2[0-3]):[0-5]\d$/
-const cadenceMonthlyPattern = /^monthly:(?:[1-9]|1\d|2[0-8])@([01]\d|2[0-3]):[0-5]\d$/
-const cadenceCronPattern = /^cron:.+$/
+const cadenceSchema = z.string().trim().min(1).max(200).refine(
+  (value) => isValidCadence(value),
+  { message: 'Cadence must be `daily@<HH:MM>`, `weekly:<dow>[,<dow>…]@<HH:MM>`, `monthly:<1..28|last>@<HH:MM>`, or `cron:<5-field expression>`' },
+)
 
-const cadenceSchema = z.string().min(1).max(200).refine(
-  (value) =>
-    cadenceWeeklyPattern.test(value) ||
-    cadenceMonthlyPattern.test(value) ||
-    cadenceCronPattern.test(value),
-  { message: 'Cadence must be `weekly:<dow>@<HH:MM>`, `monthly:<day>@<HH:MM>`, or `cron:<expr>`' },
+const timezoneSchema = z.string().trim().min(1).max(80).refine(
+  (value) => isValidTimeZone(value),
+  { message: 'Timezone must be a valid IANA timezone name' },
 )
 
 const recipientSchema = z.union([
@@ -529,13 +529,20 @@ const recipientSchema = z.union([
 ])
 export type ScheduleRecipient = z.infer<typeof recipientSchema>
 
-const scheduleFormatsSchema = z.array(z.enum(['csv', 'xlsx'])).min(1).max(2)
+export const SCHEDULE_FORMATS = ['csv', 'xlsx', 'json', 'xml', 'markdown'] as const
+export type ScheduleFormat = (typeof SCHEDULE_FORMATS)[number]
+
+const scheduleFormatsSchema = z
+  .array(z.enum(SCHEDULE_FORMATS))
+  .min(1)
+  .max(SCHEDULE_FORMATS.length)
+  .refine((formats) => new Set(formats).size === formats.length, { message: 'Formats must be unique' })
 
 export const scheduleCreateSchema = z.object({
   reportId: uuid(),
   name: nameSchema,
   cadence: cadenceSchema,
-  timezone: z.string().min(1).max(80),
+  timezone: timezoneSchema,
   recipients: z.array(recipientSchema).min(1).max(50),
   params: z.record(z.string(), z.unknown()).optional(),
   formats: scheduleFormatsSchema.optional(),
@@ -547,7 +554,7 @@ export const scheduleUpdateSchema = z.object({
   id: uuid(),
   name: nameSchema.optional(),
   cadence: cadenceSchema.optional(),
-  timezone: z.string().min(1).max(80).optional(),
+  timezone: timezoneSchema.optional(),
   recipients: z.array(recipientSchema).min(1).max(50).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   formats: scheduleFormatsSchema.optional(),
