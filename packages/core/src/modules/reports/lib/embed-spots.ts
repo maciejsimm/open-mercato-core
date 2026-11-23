@@ -7,8 +7,10 @@ import type { ParameterDef } from '@open-mercato/shared/modules/reports/dsl'
  * injected into (`widgets/injection-table.ts`), the host entity each spot
  * renders, and the host record fields an embed parameter can be bound to.
  * Field paths are read from the `data` object the host page passes to its
- * `InjectionSpot` (the customers detail overview payload), so dotted paths
- * such as `person.id` are resolved against that shape.
+ * `InjectionSpot` (the customers detail overview payload, the sales document
+ * record, the catalog product form values), so dotted paths such as
+ * `person.id` are resolved against that shape. When that payload carries no
+ * top-level `id`, the host widget fills it from the spot context's record id.
  *
  * `__tests__/embed-spots.test.ts` asserts this list and the injection table
  * stay in sync; add a spot to both when wiring the widget into a new page.
@@ -32,6 +34,11 @@ export type EmbedHostSpot = {
   sampleListPath: string
   /** Detail endpoint returning the same `data` shape the host page injects. */
   sampleDetailPath: (recordId: string) => string
+  /**
+   * `list-item` when the detail endpoint is a list filtered by id
+   * (`{ items: [record] }`), so the preview reads `items[0]`. Defaults to `record`.
+   */
+  sampleDetailShape?: 'record' | 'list-item'
   /** Path of the record's display name inside the detail payload. */
   displayNamePath: string
   fields: readonly EmbedHostField[]
@@ -42,6 +49,20 @@ export const EMBED_HOST_WIDGET_ID = 'reports.injection.record-embed-host'
 /** Prefix of free-form custom-field paths, accepted in addition to the labelled fields. */
 export const EMBED_CUSTOM_FIELD_PREFIX = 'customFields.'
 
+const SALES_DOCUMENT_FIELDS: readonly EmbedHostField[] = [
+  { path: 'customerEntityId', labelKey: 'reports.embedSpots.fields.customerId', label: 'Customer ID', kind: 'id' },
+  { path: 'channelId', labelKey: 'reports.embedSpots.fields.channelId', label: 'Sales channel ID', kind: 'id' },
+  { path: 'status', labelKey: 'reports.embedSpots.fields.status', label: 'Status', kind: 'text' },
+  { path: 'currencyCode', labelKey: 'reports.embedSpots.fields.currencyCode', label: 'Currency', kind: 'text' },
+  { path: 'customerReference', labelKey: 'reports.embedSpots.fields.customerReference', label: 'Customer reference', kind: 'text' },
+  { path: 'contactEmail', labelKey: 'reports.embedSpots.fields.contactEmail', label: 'Contact email', kind: 'text' },
+]
+
+/**
+ * Spots are the after-header slots of the record detail pages. The catalog
+ * product page is a `CrudForm`, so its embeds use the form's own stacked
+ * injection spot, which renders right below the form header.
+ */
 export const EMBED_HOST_SPOTS: readonly EmbedHostSpot[] = [
   {
     spotId: 'detail:customers.person:after-header',
@@ -85,6 +106,73 @@ export const EMBED_HOST_SPOTS: readonly EmbedHostSpot[] = [
       { path: 'profile.sizeBucket', labelKey: 'reports.embedSpots.fields.sizeBucket', label: 'Company size', kind: 'text' },
     ],
   },
+  {
+    spotId: 'detail:customers.deal:after-header',
+    hostEntityId: 'customers.deal',
+    labelKey: 'reports.embedSpots.customersDeal',
+    label: 'Customer — deal',
+    sampleListPath: '/api/customers/deals?pageSize=10',
+    sampleDetailPath: (recordId) => `/api/customers/deals/${encodeURIComponent(recordId)}?view=lite`,
+    displayNamePath: 'deal.title',
+    fields: [
+      { path: 'deal.id', labelKey: 'reports.embedSpots.fields.dealId', label: 'Deal ID', kind: 'id' },
+      { path: 'deal.title', labelKey: 'reports.embedSpots.fields.title', label: 'Title', kind: 'text' },
+      { path: 'deal.status', labelKey: 'reports.embedSpots.fields.status', label: 'Status', kind: 'text' },
+      { path: 'deal.pipelineId', labelKey: 'reports.embedSpots.fields.pipelineId', label: 'Pipeline ID', kind: 'id' },
+      { path: 'deal.pipelineStageId', labelKey: 'reports.embedSpots.fields.pipelineStageId', label: 'Pipeline stage ID', kind: 'id' },
+      { path: 'deal.ownerUserId', labelKey: 'reports.embedSpots.fields.ownerUserId', label: 'Owner (user ID)', kind: 'id' },
+      { path: 'deal.valueCurrency', labelKey: 'reports.embedSpots.fields.currencyCode', label: 'Currency', kind: 'text' },
+      { path: 'deal.source', labelKey: 'reports.embedSpots.fields.source', label: 'Source', kind: 'text' },
+      { path: 'companies.0.id', labelKey: 'reports.embedSpots.fields.firstCompanyId', label: 'First linked company ID', kind: 'id' },
+      { path: 'people.0.id', labelKey: 'reports.embedSpots.fields.firstPersonId', label: 'First linked person ID', kind: 'id' },
+    ],
+  },
+  {
+    spotId: 'detail:sales.order:after-header',
+    hostEntityId: 'sales.order',
+    labelKey: 'reports.embedSpots.salesOrder',
+    label: 'Sales — order',
+    sampleListPath: '/api/sales/orders?pageSize=10',
+    sampleDetailPath: (recordId) => `/api/sales/orders?id=${encodeURIComponent(recordId)}&page=1&pageSize=1`,
+    sampleDetailShape: 'list-item',
+    displayNamePath: 'orderNumber',
+    fields: [
+      { path: 'id', labelKey: 'reports.embedSpots.fields.orderId', label: 'Order ID', kind: 'id' },
+      { path: 'orderNumber', labelKey: 'reports.embedSpots.fields.orderNumber', label: 'Order number', kind: 'text' },
+      ...SALES_DOCUMENT_FIELDS,
+    ],
+  },
+  {
+    spotId: 'detail:sales.quote:after-header',
+    hostEntityId: 'sales.quote',
+    labelKey: 'reports.embedSpots.salesQuote',
+    label: 'Sales — quote',
+    sampleListPath: '/api/sales/quotes?pageSize=10',
+    sampleDetailPath: (recordId) => `/api/sales/quotes?id=${encodeURIComponent(recordId)}&page=1&pageSize=1`,
+    sampleDetailShape: 'list-item',
+    displayNamePath: 'quoteNumber',
+    fields: [
+      { path: 'id', labelKey: 'reports.embedSpots.fields.quoteId', label: 'Quote ID', kind: 'id' },
+      { path: 'quoteNumber', labelKey: 'reports.embedSpots.fields.quoteNumber', label: 'Quote number', kind: 'text' },
+      ...SALES_DOCUMENT_FIELDS,
+    ],
+  },
+  {
+    spotId: 'crud-form:catalog.product',
+    hostEntityId: 'catalog.product',
+    labelKey: 'reports.embedSpots.catalogProduct',
+    label: 'Catalog — product',
+    sampleListPath: '/api/catalog/products?pageSize=10',
+    sampleDetailPath: (recordId) => `/api/catalog/products?id=${encodeURIComponent(recordId)}&page=1&pageSize=1`,
+    sampleDetailShape: 'list-item',
+    displayNamePath: 'title',
+    fields: [
+      { path: 'id', labelKey: 'reports.embedSpots.fields.productId', label: 'Product ID', kind: 'id' },
+      { path: 'title', labelKey: 'reports.embedSpots.fields.title', label: 'Title', kind: 'text' },
+      { path: 'sku', labelKey: 'reports.embedSpots.fields.sku', label: 'SKU', kind: 'text' },
+      { path: 'handle', labelKey: 'reports.embedSpots.fields.handle', label: 'Handle', kind: 'text' },
+    ],
+  },
 ]
 
 export function getEmbedHostSpot(spotId: string | null | undefined): EmbedHostSpot | undefined {
@@ -108,6 +196,23 @@ export function findEmbedHostField(spot: EmbedHostSpot | undefined, path: string
 export function isAllowedRecordField(spot: EmbedHostSpot, path: string): boolean {
   if (findEmbedHostField(spot, path)) return true
   return path.startsWith(EMBED_CUSTOM_FIELD_PREFIX) && path.length > EMBED_CUSTOM_FIELD_PREFIX.length
+}
+
+/** Unwrap a sample-record response into the `data` shape the host page injects. */
+export function readSampleDetail(spot: EmbedHostSpot, payload: unknown): unknown {
+  if (spot.sampleDetailShape !== 'list-item') return payload ?? null
+  if (!payload || typeof payload !== 'object') return null
+  const items = (payload as { items?: unknown }).items
+  return Array.isArray(items) && items.length > 0 ? items[0] : null
+}
+
+/** Host payload with a top-level `id` filled from the spot context when the payload has none. */
+export function withHostRecordId(data: unknown, recordId: string | null): unknown {
+  if (!recordId) return data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { id: recordId }
+  const record = data as Record<string, unknown>
+  if (typeof record.id === 'string' && record.id.length > 0) return data
+  return { ...record, id: recordId }
 }
 
 /** Read a dotted path from the host record payload. */
@@ -271,12 +376,11 @@ export function suggestBindingDraft(
   if (existing?.source === 'record-field') return { source: 'record-field', recordField: existing.recordField }
   if (existing?.source === 'literal') return { source: 'literal', value: existing.value }
   if (!spot || param.kind !== 'fk') return { source: 'none' }
-  const normalizedKey = param.key.toLowerCase().replace(/[^a-z]/g, '')
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z]/g, '').replace(/entity/g, '')
+  const normalizedKey = normalize(param.key)
   const byName = spot.fields.find((field) => {
     const tail = field.path.split('.').pop() ?? ''
-    const normalizedTail = tail.toLowerCase().replace(/[^a-z]/g, '')
-    const normalizedPath = field.path.toLowerCase().replace(/[^a-z]/g, '')
-    return field.kind === 'id' && (normalizedTail === normalizedKey || normalizedPath === normalizedKey)
+    return field.kind === 'id' && (normalize(tail) === normalizedKey || normalize(field.path) === normalizedKey)
   })
   const fallback = spot.fields.find((field) => field.kind === 'id')
   const match = byName ?? fallback

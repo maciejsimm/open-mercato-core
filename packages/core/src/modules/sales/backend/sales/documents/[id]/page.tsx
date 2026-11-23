@@ -4845,6 +4845,7 @@ export default function SalesDocumentDetailPage({
           data={record}
           onDataChange={setRecord}
         />
+        <InjectionSpot spotId={`detail:sales.${kind}:after-header`} context={detailInjectionContext} data={record} />
         <div className="grid gap-4 md:grid-cols-4">
           <div className="md:col-span-3">
             <CustomerInlineEditor

@@ -12,8 +12,10 @@ import {
   getEmbedHostSpotForEntity,
   isKnownEmbedSpot,
   readParameterDefs,
+  readSampleDetail,
   resolveEmbedParams,
   validateEmbedConfig,
+  withHostRecordId,
 } from '../lib/embed-spots'
 import { embedCreateSchema, embedUpdateSchema } from '../data/validators'
 import { assertValidEmbedTarget } from '../commands/embed'
@@ -61,7 +63,7 @@ describe('embed host-spot registry', () => {
   it('looks spots up by id and by host entity', () => {
     expect(getEmbedHostSpot(PERSON_SPOT)?.hostEntityId).toBe('customers.person')
     expect(getEmbedHostSpotForEntity('customers.company')?.spotId).toBe(COMPANY_SPOT)
-    expect(isKnownEmbedSpot('detail:customers.deal:after-header')).toBe(false)
+    expect(isKnownEmbedSpot('detail:customers.task:after-header')).toBe(false)
     expect(isKnownEmbedSpot(undefined)).toBe(false)
   })
 })
@@ -97,7 +99,7 @@ describe('validateEmbedConfig', () => {
   })
 
   it('rejects an unknown spot id', () => {
-    const issues = validateEmbedConfig({ hostSpotId: 'detail:sales.order:after-header', parameters: [] })
+    const issues = validateEmbedConfig({ hostSpotId: 'detail:sales.invoice:after-header', parameters: [] })
     expect(issues.map((issue) => issue.code)).toEqual(['unknown_spot'])
   })
 
@@ -181,7 +183,7 @@ describe('embed schemas', () => {
   })
 
   it('rejects an unknown spot id on create and update', () => {
-    expect(embedCreateSchema.safeParse({ ...base, hostSpotId: 'detail:customers.deal:after-header' }).success).toBe(false)
+    expect(embedCreateSchema.safeParse({ ...base, hostSpotId: 'detail:customers.task:after-header' }).success).toBe(false)
     expect(embedUpdateSchema.safeParse({ id: ARTIFACT_ID, hostSpotId: 'nope:spot' }).success).toBe(false)
   })
 
@@ -246,7 +248,7 @@ describe('assertValidEmbedTarget', () => {
     mockedFindOne.mockResolvedValueOnce({ parametersJson: [] })
     const err = await captureError(
       assertValidEmbedTarget(em, scope, {
-        hostSpotId: 'detail:customers.deal:after-header',
+        hostSpotId: 'detail:customers.task:after-header',
         artifactType: 'report',
         artifactId: ARTIFACT_ID,
         paramBindings: {},
@@ -290,5 +292,57 @@ describe('configurator drafts', () => {
       b: { source: 'record-field', recordField: 'company.id' },
       c: { source: 'literal', value: 3 },
     })).toEqual({ b: { source: 'record-field', recordField: 'company.id' }, c: { source: 'literal', value: 3 } })
+  })
+})
+
+describe('record page spots', () => {
+  it('registers the deal, sales document and catalog product pages', () => {
+    expect(getEmbedHostSpotForEntity('customers.deal')?.spotId).toBe('detail:customers.deal:after-header')
+    expect(getEmbedHostSpotForEntity('sales.order')?.spotId).toBe('detail:sales.order:after-header')
+    expect(getEmbedHostSpotForEntity('sales.quote')?.spotId).toBe('detail:sales.quote:after-header')
+    expect(getEmbedHostSpotForEntity('catalog.product')?.spotId).toBe('crud-form:catalog.product')
+    expect(new Set(EMBED_HOST_SPOTS.map((spot) => spot.hostEntityId)).size).toBe(EMBED_HOST_SPOTS.length)
+  })
+
+  it('binds deal parameters to the deal payload, including the first linked company', () => {
+    const dealSpot = getEmbedHostSpot('detail:customers.deal:after-header')
+    const data = { deal: { id: 'deal-1', ownerUserId: 'user-1' }, companies: [{ id: 'company-9' }], people: [] }
+    expect(resolveEmbedParams({
+      dealId: { source: 'record-field', recordField: 'deal.id' },
+      companyId: { source: 'record-field', recordField: 'companies.0.id' },
+      personId: { source: 'record-field', recordField: 'people.0.id' },
+    }, data)).toEqual({ dealId: 'deal-1', companyId: 'company-9' })
+    expect(suggestBindingDraft(dealSpot, { key: 'ownerUserId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'deal.ownerUserId' })
+    expect(suggestBindingDraft(dealSpot, { key: 'dealId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'deal.id' })
+  })
+
+  it('pre-binds a customerId parameter to the sales document customer', () => {
+    const orderSpot = getEmbedHostSpot('detail:sales.order:after-header')
+    expect(suggestBindingDraft(orderSpot, { key: 'customerId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'customerEntityId' })
+    expect(suggestBindingDraft(orderSpot, { key: 'orderId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'id' })
+  })
+
+  it('accepts a product embed bound to the product id', () => {
+    expect(validateEmbedConfig({
+      hostSpotId: 'crud-form:catalog.product',
+      hostEntityId: 'catalog.product',
+      paramBindings: { productId: { source: 'record-field', recordField: 'id' } },
+      parameters: [{ key: 'productId', kind: 'fk', required: true }],
+    })).toEqual([])
+  })
+
+  it('unwraps list-shaped sample responses', () => {
+    const orderSpot = getEmbedHostSpot('detail:sales.order:after-header')!
+    const personSpot = getEmbedHostSpot(PERSON_SPOT)!
+    expect(readSampleDetail(orderSpot, { items: [{ id: 'o-1' }] })).toEqual({ id: 'o-1' })
+    expect(readSampleDetail(orderSpot, { items: [] })).toBeNull()
+    expect(readSampleDetail(personSpot, { person: { id: 'p-1' } })).toEqual({ person: { id: 'p-1' } })
+  })
+
+  it('fills a missing top-level id from the host context', () => {
+    expect(withHostRecordId({ title: 'Mug' }, 'prod-1')).toEqual({ title: 'Mug', id: 'prod-1' })
+    expect(withHostRecordId({ id: 'own' }, 'prod-1')).toEqual({ id: 'own' })
+    expect(withHostRecordId(null, 'prod-1')).toEqual({ id: 'prod-1' })
+    expect(withHostRecordId({ title: 'Mug' }, null)).toEqual({ title: 'Mug' })
   })
 })

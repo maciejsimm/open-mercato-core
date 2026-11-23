@@ -25,6 +25,7 @@ import {
   getEmbedHostSpot,
   readHostRecordField,
   readParameterDefs,
+  readSampleDetail,
   suggestBindingDraft,
   validateEmbedConfig,
   type EmbedBindingDraft,
@@ -67,7 +68,7 @@ function toArtifactOptions(items: ArtifactListItem[] | undefined, type: Artifact
 }
 
 function readSampleLabel(item: Record<string, unknown>): string {
-  for (const key of ['display_name', 'displayName', 'name', 'primary_email']) {
+  for (const key of ['display_name', 'displayName', 'name', 'title', 'orderNumber', 'order_number', 'quoteNumber', 'quote_number', 'primary_email']) {
     const value = item[key]
     if (typeof value === 'string' && value.trim()) return value
   }
@@ -306,6 +307,9 @@ export default function EmbedConfiguratorPage() {
                     </Button>
                   ))}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {t('reports.embeds.configurator.where.homeHint', 'To show a report on the home screen, add the "Report" widget from the dashboard\'s widget picker instead.')}
+                </p>
               </section>
 
               <section className="space-y-3 rounded-md border border-border bg-card p-4">
@@ -556,7 +560,7 @@ function EmbedPreview({ spot, artifact, bindings, displayTitle, ready }: EmbedPr
           setSampleError(t('reports.embeds.configurator.preview.sampleError', 'Could not load a sample record.'))
           return
         }
-        setHostData(call.result ?? null)
+        setHostData(readSampleDetail(spot, call.result))
       })
       .catch(() => {
         if (!cancelled) setSampleError(t('reports.embeds.configurator.preview.sampleError', 'Could not load a sample record.'))
