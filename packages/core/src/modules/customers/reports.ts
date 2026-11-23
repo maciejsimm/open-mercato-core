@@ -124,6 +124,48 @@ export const datasets = [
     defaultSort: [{ field: 'created_at', dir: 'desc' }],
     defaultPageSize: 50,
   }),
+
+  defineDataset({
+    id: 'customers.activities',
+    moduleId: 'customers',
+    labelKey: 'customers.reports.datasets.activities.label',
+    descriptionKey: 'customers.reports.datasets.activities.description',
+    entityType: 'customers:customer_activity',
+    requiredFeatures: ['customers.activities.view'],
+    fields: [
+      { key: 'id', labelKey: 'customers.reports.fields.activity.id', kind: 'id' },
+      { key: 'entity_id', labelKey: 'customers.reports.fields.activity.entity_id', kind: 'fk' },
+      { key: 'deal_id', labelKey: 'customers.reports.fields.activity.deal_id', kind: 'fk' },
+      { key: 'activity_type', labelKey: 'customers.reports.fields.activity.activity_type', kind: 'enum' },
+      {
+        key: 'subject',
+        labelKey: 'customers.reports.fields.activity.subject',
+        kind: 'text',
+        aggregations: ['count', 'count_distinct'],
+      },
+      { key: 'author_user_id', labelKey: 'customers.reports.fields.activity.author_user_id', kind: 'fk' },
+      {
+        key: 'occurred_at',
+        labelKey: 'customers.reports.fields.activity.occurred_at',
+        kind: 'datetime',
+        aggregations: ['min', 'max', 'count'],
+      },
+      {
+        key: 'created_at',
+        labelKey: 'customers.reports.fields.activity.created_at',
+        kind: 'datetime',
+        aggregations: ['min', 'max', 'count'],
+      },
+      {
+        key: 'updated_at',
+        labelKey: 'customers.reports.fields.activity.updated_at',
+        kind: 'datetime',
+        aggregations: ['min', 'max', 'count'],
+      },
+    ],
+    defaultSort: [{ field: 'occurred_at', dir: 'desc' }],
+    defaultPageSize: 50,
+  }),
 ]
 
 export default datasets
