@@ -6,6 +6,8 @@ import { injectionTable } from '../widgets/injection-table'
 import {
   EMBED_HOST_SPOTS,
   EMBED_HOST_WIDGET_ID,
+  draftsToBindings,
+  suggestBindingDraft,
   getEmbedHostSpot,
   getEmbedHostSpotForEntity,
   isKnownEmbedSpot,
@@ -265,5 +267,28 @@ describe('assertValidEmbedTarget', () => {
     )
     expect(err.status).toBe(400)
     expect(err.body).toEqual(expect.objectContaining({ code: 'EMBED_ARTIFACT_NOT_FOUND' }))
+  })
+})
+
+describe('configurator drafts', () => {
+  const companySpot = getEmbedHostSpot(COMPANY_SPOT)
+
+  it('pre-binds fk parameters to a matching host id field', () => {
+    expect(suggestBindingDraft(companySpot, { key: 'companyId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'company.id' })
+    expect(suggestBindingDraft(companySpot, { key: 'ownerUserId', kind: 'fk' })).toEqual({ source: 'record-field', recordField: 'company.ownerUserId' })
+    expect(suggestBindingDraft(companySpot, { key: 'region', kind: 'string' })).toEqual({ source: 'none' })
+  })
+
+  it('keeps an existing binding', () => {
+    expect(suggestBindingDraft(companySpot, { key: 'region', kind: 'string' }, { source: 'literal', value: 'EMEA' }))
+      .toEqual({ source: 'literal', value: 'EMEA' })
+  })
+
+  it('omits unbound rows when building bindings', () => {
+    expect(draftsToBindings({
+      a: { source: 'none' },
+      b: { source: 'record-field', recordField: 'company.id' },
+      c: { source: 'literal', value: 3 },
+    })).toEqual({ b: { source: 'record-field', recordField: 'company.id' }, c: { source: 'literal', value: 3 } })
   })
 })

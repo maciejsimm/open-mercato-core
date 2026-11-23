@@ -48,7 +48,7 @@ export const EMBED_HOST_SPOTS: readonly EmbedHostSpot[] = [
     hostEntityId: 'customers.person',
     labelKey: 'reports.embedSpots.customersPerson',
     label: 'Customer — person',
-    sampleListPath: '/api/customers/people?pageSize=1',
+    sampleListPath: '/api/customers/people?pageSize=10',
     sampleDetailPath: (recordId) => `/api/customers/people/${encodeURIComponent(recordId)}`,
     displayNamePath: 'person.displayName',
     fields: [
@@ -69,7 +69,7 @@ export const EMBED_HOST_SPOTS: readonly EmbedHostSpot[] = [
     hostEntityId: 'customers.company',
     labelKey: 'reports.embedSpots.customersCompany',
     label: 'Customer — company',
-    sampleListPath: '/api/customers/companies?pageSize=1',
+    sampleListPath: '/api/customers/companies?pageSize=10',
     sampleDetailPath: (recordId) => `/api/customers/companies/${encodeURIComponent(recordId)}`,
     displayNamePath: 'company.displayName',
     fields: [
@@ -238,4 +238,47 @@ export function readParameterDefs(raw: unknown): ParameterDef[] {
     out.push(candidate as ParameterDef)
   }
   return out
+}
+
+export type EmbedBindingDraft =
+  | { source: 'none' }
+  | { source: 'record-field'; recordField: string }
+  | { source: 'literal'; value: unknown }
+
+/** Convert configurator rows into stored bindings; unbound rows are omitted. */
+export function draftsToBindings(drafts: Readonly<Record<string, EmbedBindingDraft>>): EmbedBindings {
+  const out: EmbedBindings = {}
+  for (const [paramKey, draft] of Object.entries(drafts)) {
+    if (draft.source === 'record-field') {
+      if (draft.recordField) out[paramKey] = { source: 'record-field', recordField: draft.recordField }
+    } else if (draft.source === 'literal') {
+      out[paramKey] = { source: 'literal', value: draft.value }
+    }
+  }
+  return out
+}
+
+/**
+ * Default row for a parameter: an existing binding wins; otherwise an `fk`
+ * parameter whose key names a host field (`companyId` → `Company ID`) or the
+ * host record's own id is pre-bound to that field.
+ */
+export function suggestBindingDraft(
+  spot: EmbedHostSpot | undefined,
+  param: ParameterDef,
+  existing?: EmbedBinding,
+): EmbedBindingDraft {
+  if (existing?.source === 'record-field') return { source: 'record-field', recordField: existing.recordField }
+  if (existing?.source === 'literal') return { source: 'literal', value: existing.value }
+  if (!spot || param.kind !== 'fk') return { source: 'none' }
+  const normalizedKey = param.key.toLowerCase().replace(/[^a-z]/g, '')
+  const byName = spot.fields.find((field) => {
+    const tail = field.path.split('.').pop() ?? ''
+    const normalizedTail = tail.toLowerCase().replace(/[^a-z]/g, '')
+    const normalizedPath = field.path.toLowerCase().replace(/[^a-z]/g, '')
+    return field.kind === 'id' && (normalizedTail === normalizedKey || normalizedPath === normalizedKey)
+  })
+  const fallback = spot.fields.find((field) => field.kind === 'id')
+  const match = byName ?? fallback
+  return match ? { source: 'record-field', recordField: match.path } : { source: 'none' }
 }
