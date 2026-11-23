@@ -46,7 +46,7 @@ Useful knobs: `OM_REPORTS_INMEMORY_CAP` (default 25 000, lower it to e.g. `50` t
 | 3.1 | Create 150+ records (or use a big dataset), build a *Summary* with *Count of ID*. | The count equals the real total, not 100. |
 | 3.2 | Set `OM_REPORTS_INMEMORY_CAP=50`, run a grouped report over more rows. | Run answers "running in the background"; a notification "Report ready" arrives with a CSV download link. |
 | 3.3 | As **employee**, open the download link of an admin's execution. | 404 — only the requester can download. |
-| 3.4 | Share a private folder with a **role** the employee has (folder sharing). | The employee sees the folder and its reports. |
+| 3.4 | Hover a private folder under *My Reports* → click the share icon → *Role* → pick a role the employee has → *Can view* → **Share**. | The share is listed under *Who has access*; the employee sees the folder under *Shared with me* and can run its reports. Removing it (trash icon) revokes access immediately. Sharing needs `reports.share`; public folders have no share icon because everyone already sees them. |
 | 3.5 | Remove `customers.view_pii` (or another field-ACL feature) from a user and run a report using that field. | 403 "references fields you may not see"; saving such a report is also refused. |
 | 3.6 | As super-admin pick "All organizations" in the organization switcher and open Reports. | You only see reports of your own organization (or a "Select an organization" message when switched to another tenant) — never a mix of organizations. |
 
