@@ -131,6 +131,7 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
       tenantId,
       organizationId,
       userFeatures,
+      userId: access.userId,
       queryEngine,
       cacheService,
       now,
@@ -154,6 +155,7 @@ type RunTileContext = {
   tenantId: string
   organizationId: string
   userFeatures: ReadonlySet<string>
+  userId: string
   queryEngine: QueryEngine
   cacheService: ReportsCacheService | null
   now: Date
@@ -186,6 +188,7 @@ async function runTile(tile: DashboardTileInput, ctx: RunTileContext): Promise<T
         dataset,
         definition,
         userFeatures: ctx.userFeatures,
+        userId: ctx.userId,
         tenantId: ctx.tenantId,
         organizationId: ctx.organizationId,
         params,

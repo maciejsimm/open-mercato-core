@@ -80,6 +80,7 @@ export async function POST(req: Request) {
       dataset,
       definition,
       userFeatures,
+      userId: access.userId,
       tenantId: access.tenantId,
       organizationId,
       params: parsed.data.params ?? {},
