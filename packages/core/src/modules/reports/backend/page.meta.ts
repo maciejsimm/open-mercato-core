@@ -9,9 +9,9 @@ const reportsIcon = React.createElement(
   React.createElement('rect', { x: 17, y: 13, width: 3, height: 5 })
 )
 
-// Top-level entry — no `pageGroup` so the link stays visible in the
-// sidebar even when the secondary "Reports" admin group (Schedules,
-// Embeds) is collapsed by the user.
+// Top-level entry, first in the Reports group. `buildAdminNav` sorts by
+// `pagePriority ?? pageOrder`, then title, so Reports (50) must stay below
+// Dashboards (60) to render first. Embeds and Schedules nest under it.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.view'],

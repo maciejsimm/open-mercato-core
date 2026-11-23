@@ -7,17 +7,14 @@ const schedulesIcon = React.createElement(
   React.createElement('path', { d: 'M12 7v5l3 2' }),
 )
 
-// Hidden from the sidebar — accessed via "New Schedule" (a child of
-// Dashboards) or by deep link. Schedule administration sits inside the
-// per-report detail UI rather than as a global sidebar entry.
+// Child of Reports in the sidebar (shown when the Reports section is active).
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.schedule'],
   pageTitle: 'Schedules',
   pageTitleKey: 'reports.schedules.nav.title',
-  navHidden: true,
-  pagePriority: 50,
-  pageOrder: 130,
+  pageParent: '/backend/reports',
+  pageOrder: 30,
   icon: schedulesIcon,
   breadcrumb: [
     { label: 'Reports', labelKey: 'reports.nav.reports', href: '/backend/reports' },

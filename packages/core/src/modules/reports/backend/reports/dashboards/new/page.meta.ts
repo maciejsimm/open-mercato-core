@@ -1,7 +1,4 @@
-// Truly hidden from the sidebar. The previous `hideInNav: true` was a
-// typo for `navHidden`; correctly hiding it now keeps the Dashboards
-// sub-nav focused on the children the user asked for (New Embed, New
-// Schedule). Accessible via the Dashboards list page CTA.
+// Hidden from the sidebar; reached from the Dashboards list "New dashboard" action.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.author'],
