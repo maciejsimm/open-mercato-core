@@ -244,4 +244,3 @@ function SortRow({ entry, index, count, candidate, options, showEnumOrder, canEd
   )
 }
 
-export default SortEditor
