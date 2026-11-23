@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { measureAlias } from '@open-mercato/shared/modules/reports/dsl'
+import { isKnownEmbedSpot } from '../lib/embed-spots'
 
 const uuid = () => z.string().uuid()
 
@@ -462,11 +463,18 @@ const embedParamBindingSchema = z.union([
   z.object({ source: z.literal('record-field'), recordField: z.string().min(1).max(120) }),
 ])
 
-const embedSpotPattern = /^[a-zA-Z][a-zA-Z0-9_:.\-]+$/
+const embedSpotSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((value) => isKnownEmbedSpot(value), {
+    message: 'hostSpotId must be one of the registered embed spots',
+  })
 
 export const embedCreateSchema = z.object({
-  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern, { message: 'hostSpotId must look like a widget spot id' }),
-  hostEntityId: z.string().min(1).max(120),
+  hostSpotId: embedSpotSchema,
+  /** Derived from `hostSpotId` when omitted; must match the spot's entity when given. */
+  hostEntityId: z.string().min(1).max(120).optional(),
   artifactType: embedArtifactTypeSchema,
   artifactId: uuid(),
   paramBindings: z.record(z.string(), embedParamBindingSchema).optional(),
@@ -478,7 +486,7 @@ export type EmbedCreateInput = z.infer<typeof embedCreateSchema>
 
 export const embedUpdateSchema = z.object({
   id: uuid(),
-  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern).optional(),
+  hostSpotId: embedSpotSchema.optional(),
   hostEntityId: z.string().min(1).max(120).optional(),
   artifactType: embedArtifactTypeSchema.optional(),
   artifactId: uuid().optional(),
