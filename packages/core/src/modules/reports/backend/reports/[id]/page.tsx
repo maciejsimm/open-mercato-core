@@ -12,7 +12,7 @@ import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
-import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical, Download, Settings, Pencil } from 'lucide-react'
+import { ArrowLeft, Play, Save, Trash2, Plus, X, GripVertical, Download, Settings, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { ReportChart } from '../../../widgets/ReportChart'
 import {
@@ -74,13 +74,17 @@ import {
   type BuilderLiteralFilter,
   type ChartDefinition,
   type DraftStash,
-  type DroppedItem,
   type FlatListDefinition,
   type GroupedDefinition,
   type PivotDefinition,
   type SummaryDefinition,
 } from '../../../lib/definition-migrate'
 import { ResultTable, buildSeriesLabels, measureLabel } from './components/ResultView'
+import { SortEditor } from './components/SortEditor'
+import { buildPreviewRequestBody, buildTypeSwitchMessage, filterFieldsByQuery } from './components/builder-helpers'
+import { readJsonFromLocalStorage, writeJsonToLocalStorage } from '@open-mercato/shared/lib/browser/safeLocalStorage'
+import { SearchInput } from '@open-mercato/ui/primitives/search-input'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 
 type Aggregation = MeasureExpr['aggregation']
 type ChartType = ChartKind
@@ -419,6 +423,9 @@ function isPreviewable(def: Definition): boolean {
   }
 }
 
+const PREVIEW_DEBOUNCE_MS = 500
+const FIELD_SIDEBAR_STORAGE_KEY = 'om:reports:builder:fields-sidebar'
+
 const FIELD_DRAG_PREFIX = 'field:'
 const ZONE_DROP_PREFIX = 'zone:'
 const CHIP_PREFIX = 'chip:'
@@ -568,6 +575,14 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   const [previewError, setPreviewError] = React.useState<PreviewError | null>(null)
   const [viewMode, setViewMode] = React.useState<'edit' | 'run'>('edit')
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [fieldsCollapsed, setFieldsCollapsed] = React.useState(false)
+  React.useEffect(() => {
+    setFieldsCollapsed(readJsonFromLocalStorage<boolean>(FIELD_SIDEBAR_STORAGE_KEY, false) === true)
+  }, [])
+  const setFieldsSidebarCollapsed = React.useCallback((next: boolean) => {
+    setFieldsCollapsed(next)
+    writeJsonToLocalStorage(FIELD_SIDEBAR_STORAGE_KEY, next)
+  }, [])
 
   // Load effect — depends only on reportId. We deliberately do NOT gate
   // `setIsLoading(false)` on a cancelled flag any more: an earlier bullet
@@ -688,7 +703,6 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   const editRevision = React.useRef(0)
   const draftStash = React.useRef<DraftStash>({})
-  const [typeSwitchNotice, setTypeSwitchNotice] = React.useState<{ type: ReportType; dropped: DroppedItem[] } | null>(null)
 
   const applyDefinition = React.useCallback((update: (prev: Definition) => Definition) => {
     setDefinition((prev) => {
@@ -764,9 +778,11 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     const result = switchDefinitionType(definition, next, draftStash.current, editRevision.current)
     draftStash.current = result.stash
     setDefinition(result.definition)
-    setTypeSwitchNotice(result.dropped.length > 0 ? { type: next, dropped: result.dropped } : null)
+    if (result.dropped.length > 0) {
+      flash(buildTypeSwitchMessage(next, result.dropped, fieldByKey, t), 'warning')
+    }
     markDirty()
-  }, [canEdit, definition, markDirty])
+  }, [canEdit, definition, fieldByKey, markDirty, t])
 
   const handleColumnFormatChange = React.useCallback((key: string, format: FieldFormat | undefined) => {
     applyDefinition((prev) => {
@@ -873,18 +889,26 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   // ----- Auto-preview (edit mode) ---------------------------------------
   // Re-runs an ad-hoc preview against /api/reports/preview whenever the
-  // definition or parameters change. Debounced so a chip reorder / typed
-  // alias doesn't fire on every keystroke; capped at 10 rows server-side
+  // request body changes. The body keeps only query-relevant parameter
+  // declarations (referenced by a filter, without labels), so typing a
+  // parameter name or label never re-runs it. Debounced so a chip reorder /
+  // typed alias doesn't fire on every keystroke; capped at 10 rows server-side
   // so the call is cheap. Skipped in run mode (the full result lives in
   // `runResult` and is updated by the explicit Run action instead).
   const previewToken = React.useRef(0)
+  const previewDatasetId = report?.datasetId ?? null
+  const previewBody = React.useMemo(
+    () => (previewDatasetId ? buildPreviewRequestBody(previewDatasetId, definition, parameters) : null),
+    [definition, parameters, previewDatasetId],
+  )
+  const previewable = React.useMemo(() => isPreviewable(definition), [definition])
   React.useEffect(() => {
     if (viewMode !== 'edit') return
-    if (!report) return
+    if (!previewBody) return
     // Heuristic validity guard: skip the call when the definition cannot
     // possibly return rows. The preview endpoint would reject these too,
     // but checking client-side keeps spinner noise down.
-    if (!isPreviewable(definition)) {
+    if (!previewable) {
       setPreviewResult(null)
       setPreviewError(null)
       setIsPreviewing(false)
@@ -898,12 +922,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
         const call = await apiCall<ReportRunResponse>('/api/reports/preview', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            datasetId: report.datasetId,
-            definition,
-            parameters,
-            limit: 10,
-          }),
+          body: previewBody,
         })
         if (token !== previewToken.current) return
         if (call.ok) {
@@ -928,9 +947,9 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
       } finally {
         if (token === previewToken.current) setIsPreviewing(false)
       }
-    }, 450)
+    }, PREVIEW_DEBOUNCE_MS)
     return () => clearTimeout(handle)
-  }, [viewMode, report, definition, parameters])
+  }, [viewMode, previewBody, previewable])
 
   // Show the spinner while the load is in flight AND for the brief frame
   // after `isLoading` flips false but before `report` is populated — without
@@ -995,34 +1014,40 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
-              <div className="flex flex-col gap-4 lg:flex-row">
-                <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-60">
-                  <div className="rounded-md border border-border bg-card p-3">
-                    <TypeSelect
-                      value={definition.type}
-                      onChange={handleTypeChange}
-                      canEdit={canEdit}
-                      t={t}
-                    />
-                    {typeSwitchNotice ? (
-                      <TypeSwitchNotice
-                        type={typeSwitchNotice.type}
-                        dropped={typeSwitchNotice.dropped}
-                        fieldByKey={fieldByKey}
-                        onDismiss={() => setTypeSwitchNotice(null)}
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+                {fieldsCollapsed ? (
+                  <CollapsedFieldsRail onExpand={() => setFieldsSidebarCollapsed(false)} t={t} />
+                ) : (
+                  <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-60">
+                    <div className="rounded-md border border-border bg-card p-3">
+                      <TypeSelect
+                        value={definition.type}
+                        onChange={handleTypeChange}
+                        canEdit={canEdit}
                         t={t}
                       />
-                    ) : null}
-                  </div>
-                  <FieldList
-                    fields={datasetFields}
-                    hiddenPaths={dataset?.hiddenFieldPaths ?? []}
-                    canEdit={canEdit}
-                    isDraggingChip={isDraggingChip}
-                    t={t}
-                  />
-                </aside>
+                    </div>
+                    <FieldList
+                      fields={datasetFields}
+                      hiddenPaths={dataset?.hiddenFieldPaths ?? []}
+                      canEdit={canEdit}
+                      isDraggingChip={isDraggingChip}
+                      onCollapse={() => setFieldsSidebarCollapsed(true)}
+                      t={t}
+                    />
+                  </aside>
+                )}
                 <div className="flex min-w-0 flex-1 flex-col gap-4">
+                  {fieldsCollapsed ? (
+                    <div className="rounded-md border border-border bg-card p-3 sm:max-w-xs">
+                      <TypeSelect
+                        value={definition.type}
+                        onChange={handleTypeChange}
+                        canEdit={canEdit}
+                        t={t}
+                      />
+                    </div>
+                  ) : null}
                   <EditorTabsCard
                     definition={definition}
                     parameters={parameters}
@@ -1300,30 +1325,63 @@ type FieldListProps = {
   hiddenPaths: string[]
   canEdit: boolean
   isDraggingChip: boolean
+  onCollapse: () => void
   t: ReturnType<typeof useT>
 }
 
-function FieldList({ fields, hiddenPaths, canEdit, isDraggingChip, t }: FieldListProps) {
+function FieldList({ fields, hiddenPaths, canEdit, isDraggingChip, onCollapse, t }: FieldListProps) {
+  const [query, setQuery] = React.useState('')
+  const visibleFields = React.useMemo(
+    () => filterFieldsByQuery(fields, query, (key, fallback) => t(key, fallback)),
+    [fields, query, t],
+  )
   return (
-    <section className="space-y-2 rounded-md border border-border bg-card p-3">
-      <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.fields', 'Dataset fields')}</h2>
+    <section className="space-y-2 rounded-md border border-border bg-card p-2" data-testid="reports-fields-sidebar">
+      <div className="flex items-center justify-between gap-2 pl-1">
+        <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.fields', 'Dataset fields')}</h2>
+        <IconButton
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={onCollapse}
+          aria-label={t('reports.detail.fields.collapse', 'Hide fields')}
+          aria-expanded
+          data-testid="reports-fields-collapse"
+        >
+          <PanelLeftClose className="size-3.5" aria-hidden />
+        </IconButton>
+      </div>
+      {fields.length > 0 ? (
+        <SearchInput
+          size="sm"
+          value={query}
+          onChange={setQuery}
+          placeholder={t('reports.detail.fields.search', 'Search fields…')}
+          aria-label={t('reports.detail.fields.search', 'Search fields…')}
+          clearLabel={t('reports.detail.fields.searchClear', 'Clear field search')}
+        />
+      ) : null}
       {canEdit && fields.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="px-1 text-xs text-muted-foreground">
           {t('reports.detail.fields.dragHintZones', 'Drag a field into a zone. Drag a chip onto the remove strip to remove it.')}
         </p>
       ) : null}
       {canEdit ? <RemoveDropStrip active={isDraggingChip} t={t} /> : null}
       {fields.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('reports.detail.fields.empty', 'No fields available for this dataset.')}</p>
+        <p className="px-1 text-sm text-muted-foreground">{t('reports.detail.fields.empty', 'No fields available for this dataset.')}</p>
+      ) : visibleFields.length === 0 ? (
+        <p className="px-1 text-xs text-muted-foreground" data-testid="reports-fields-no-match">
+          {t('reports.detail.fields.noMatch', 'No fields match "{query}".', { query: query.trim() })}
+        </p>
       ) : (
-        <ul className="space-y-1 max-h-[60vh] overflow-y-auto pr-1">
-          {fields.map((field) => (
+        <ul className="max-h-[70vh] space-y-0.5 overflow-y-auto pr-1">
+          {visibleFields.map((field) => (
             <DraggableFieldRow key={field.key} field={field} canEdit={canEdit} t={t} />
           ))}
         </ul>
       )}
       {hiddenPaths.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="px-1 text-xs text-muted-foreground">
           {t('reports.detail.fields.hiddenCount', '{count} hidden by ACL').replace('{count}', String(hiddenPaths.length))}
         </p>
       ) : null}
@@ -1370,27 +1428,45 @@ function DraggableFieldRow({ field, canEdit, t }: DraggableFieldRowProps) {
     id: `field:${field.key}`,
     disabled: !canEdit,
   })
+  const label = t(field.labelKey, field.key)
   return (
     <li
       ref={setNodeRef}
+      title={`${label} (${field.key})`}
       className={cn(
-        'rounded-md border border-border/60 bg-background px-3 py-2 text-sm',
+        'rounded-sm border border-transparent px-1.5 py-1 hover:border-border hover:bg-muted/50',
         canEdit ? 'cursor-grab touch-none active:cursor-grabbing' : '',
         isDragging ? 'opacity-50' : '',
       )}
-      aria-label={t('reports.detail.fields.dragField', 'Drag {name} into a zone').replace('{name}', t(field.labelKey, field.key))}
+      aria-label={t('reports.detail.fields.dragField', 'Drag {name} into a zone').replace('{name}', label)}
       {...(canEdit ? attributes : {})}
       {...(canEdit ? listeners : {})}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5">
-          {canEdit ? <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden /> : null}
-          <span className="font-medium">{t(field.labelKey, field.key)}</span>
-        </span>
-        <span className="text-xs text-muted-foreground">{field.kind}</span>
+      <div className="flex items-center gap-1.5">
+        {canEdit ? <GripVertical className="size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{label}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{field.kind}</span>
       </div>
-      <div className="mt-1 font-mono text-xs text-muted-foreground">{field.key}</div>
+      <div className={cn('truncate font-mono text-xs text-muted-foreground', canEdit ? 'pl-4' : '')}>{field.key}</div>
     </li>
+  )
+}
+
+function CollapsedFieldsRail({ onExpand, t }: { onExpand: () => void; t: ReturnType<typeof useT> }) {
+  return (
+    <div className="flex items-start lg:flex-col" data-testid="reports-fields-rail">
+      <IconButton
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onExpand}
+        aria-label={t('reports.detail.fields.expand', 'Show fields')}
+        aria-expanded={false}
+        data-testid="reports-fields-expand"
+      >
+        <PanelLeftOpen className="size-4" aria-hidden />
+      </IconButton>
+    </div>
   )
 }
 
@@ -1538,7 +1614,7 @@ function EditorTabsCard({
   const parameterCount = parameters.length
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col rounded-md border border-border bg-card">
+    <div className="flex min-w-0 flex-col rounded-md border border-border bg-card">
       <Tabs defaultValue="fields" className="flex flex-col">
         <div className="border-b border-border px-3 py-2">
           <TabsList>
@@ -1575,13 +1651,16 @@ function EditorTabsCard({
             onChange={(nextFilters) => onDefinitionChange({ ...definition, filters: nextFilters } as Definition)}
             t={t}
           />
-          <SortLimitRow
-            definition={definition}
-            fields={fields}
-            canEdit={canEdit}
-            onChange={onDefinitionChange}
-            t={t}
-          />
+          <div className="border-t border-border pt-3">
+            <SortEditor
+              definition={definition}
+              fields={fields}
+              fieldByKey={fieldByKey}
+              canEdit={canEdit}
+              onChange={onDefinitionChange}
+              t={t}
+            />
+          </div>
         </TabsContent>
         <TabsContent value="parameters" className="p-3">
           <ParametersSection
@@ -1614,7 +1693,7 @@ function Zone({ zoneId, title, description, children, emptyLabel, isEmpty }: Zon
     <section
       ref={drop.setNodeRef}
       className={cn(
-        'space-y-2 rounded-md border border-dashed border-border bg-card/60 p-3 transition-colors',
+        'space-y-1.5 rounded-md border border-dashed border-border bg-card/60 px-3 py-2 transition-colors',
         drop.isOver ? 'border-primary bg-primary/5' : '',
       )}
       data-zone-id={zoneId}
@@ -1625,7 +1704,7 @@ function Zone({ zoneId, title, description, children, emptyLabel, isEmpty }: Zon
           {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         </div>
       </div>
-      <div className="min-h-[2rem] space-y-1">
+      <div className="min-h-8 space-y-1">
         {isEmpty && emptyLabel ? (
           <p className="px-2 py-1 text-xs text-muted-foreground">{emptyLabel}</p>
         ) : (
@@ -1824,90 +1903,6 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
         </SortableContext>
       </Zone>
 
-    </div>
-  )
-}
-
-/**
- * Sort + Direction + Limit row, lifted out of FlatListCanvas so it can
- * render inside the Filters tab. Reads/writes `definition.sort` and
- * `definition.limit` on flat_list reports; renders nothing for report
- * types that don't surface a sort/limit knob (grouped/pivot/chart/summary
- * have their own sort affordances).
- */
-function SortLimitRow({
-  definition,
-  fields,
-  canEdit,
-  onChange,
-  t,
-}: {
-  definition: Definition
-  fields: DatasetFieldRow[]
-  canEdit: boolean
-  onChange: (next: Definition) => void
-  t: ReturnType<typeof useT>
-}) {
-  if (definition.type !== 'flat_list') return null
-  const sortableFields = fields.filter((f) => f.sortable !== false)
-  const sortField = definition.sort[0]?.field ?? ''
-  const sortDir = (definition.sort[0]?.dir ?? 'asc') as 'asc' | 'desc'
-  const setSort = (next: SortShape[]) => onChange({ ...definition, sort: next })
-  const setLimit = (next?: number) => onChange({ ...definition, limit: next })
-  return (
-    <div className="grid gap-3 sm:grid-cols-[1fr_1fr_minmax(0,180px)]">
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.sort', 'Sort')}</span>
-        <select
-          value={sortField}
-          onChange={(e) => {
-            const value = e.target.value
-            if (!value) return setSort([])
-            setSort([{ field: value, dir: sortDir }])
-          }}
-          disabled={!canEdit}
-          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-        >
-          <option value="">{t('reports.detail.fields.sortNone', 'No sort')}</option>
-          {sortableFields.map((f) => (
-            <option key={f.key} value={f.key}>{t(f.labelKey, f.key)}</option>
-          ))}
-        </select>
-      </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">{t('reports.detail.fields.sortDir', 'Direction')}</span>
-        <select
-          value={sortDir}
-          onChange={(e) => {
-            if (!sortField) return
-            setSort([{ field: sortField, dir: e.target.value as 'asc' | 'desc' }])
-          }}
-          disabled={!canEdit || !sortField}
-          className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-        >
-          <option value="asc">{t('reports.detail.fields.sortAsc', 'Ascending')}</option>
-          <option value="desc">{t('reports.detail.fields.sortDesc', 'Descending')}</option>
-        </select>
-      </label>
-      <label className="block space-y-1">
-        <span className="text-xs font-medium text-foreground">{t('reports.detail.zones.limit', 'Limit')}</span>
-        <Input
-          type="number"
-          min={1}
-          max={100000}
-          value={definition.limit ?? ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            if (!raw.trim()) return setLimit(undefined)
-            const parsed = Number(raw)
-            if (!Number.isFinite(parsed) || parsed <= 0) return
-            setLimit(Math.min(Math.floor(parsed), 100_000))
-          }}
-          disabled={!canEdit}
-          placeholder={t('reports.detail.fields.limitPlaceholder', 'No limit')}
-          className="h-9"
-        />
-      </label>
     </div>
   )
 }
@@ -3241,83 +3236,6 @@ function renderParameterDefaultInput(
       disabled={!canEdit}
       className="h-8 w-56 text-sm"
     />
-  )
-}
-
-// ---------- Type switch notice ----------
-
-const DROPPED_SLOT_ORDER: ReadonlyArray<DroppedItem['slot']> = ['fields', 'groupBy', 'cols', 'measures', 'sort', 'limit', 'chart']
-
-const DROPPED_SLOT_LABELS: Record<DroppedItem['slot'], { key: string; fallback: string }> = {
-  fields: { key: 'reports.detail.typeSwitch.slots.fields', fallback: 'Fields' },
-  groupBy: { key: 'reports.detail.typeSwitch.slots.groupBy', fallback: 'Group by' },
-  cols: { key: 'reports.detail.typeSwitch.slots.cols', fallback: 'Pivot columns' },
-  measures: { key: 'reports.detail.typeSwitch.slots.measures', fallback: 'Measures' },
-  sort: { key: 'reports.detail.typeSwitch.slots.sort', fallback: 'Sort' },
-  limit: { key: 'reports.detail.typeSwitch.slots.limit', fallback: 'Limit' },
-  chart: { key: 'reports.detail.typeSwitch.slots.chart', fallback: 'Chart settings' },
-}
-
-function droppedItemLabel(item: DroppedItem, fieldByKey: Map<string, DatasetFieldRow>, t: ReturnType<typeof useT>): string {
-  switch (item.slot) {
-    case 'measures':
-      return measureLabel({ field: item.field, aggregation: item.aggregation }, fieldByKey, t)
-    case 'limit':
-      return String(item.value)
-    case 'chart':
-      return t(`reports.detail.chart.kind.${item.chartType}`, item.chartType)
-    default: {
-      const field = fieldByKey.get(item.field)
-      return field ? t(field.labelKey, field.key) : item.field
-    }
-  }
-}
-
-function TypeSwitchNotice({
-  type,
-  dropped,
-  fieldByKey,
-  onDismiss,
-  t,
-}: {
-  type: ReportType
-  dropped: DroppedItem[]
-  fieldByKey: Map<string, DatasetFieldRow>
-  onDismiss: () => void
-  t: ReturnType<typeof useT>
-}) {
-  const groups = DROPPED_SLOT_ORDER
-    .map((slot) => ({ slot, items: dropped.filter((item) => item.slot === slot) }))
-    .filter((group) => group.items.length > 0)
-  return (
-    <Alert
-      status="warning"
-      size="sm"
-      className="mt-3"
-      dismissible
-      onDismiss={onDismiss}
-      dismissAriaLabel={t('reports.detail.typeSwitch.dismiss', 'Dismiss')}
-      data-testid="reports-type-switch-notice"
-    >
-      <AlertDescription>
-        <p>
-          {t('reports.detail.typeSwitch.dropped', '{type} cannot keep everything. Not carried over:', {
-            type: t(`reports.list.types.${type}`, type),
-          })}
-        </p>
-        <ul className="mt-1 space-y-0.5">
-          {groups.map((group) => (
-            <li key={group.slot}>
-              <span className="font-medium">{t(DROPPED_SLOT_LABELS[group.slot].key, DROPPED_SLOT_LABELS[group.slot].fallback)}:</span>{' '}
-              {group.items.map((item) => droppedItemLabel(item, fieldByKey, t)).join(', ')}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1">
-          {t('reports.detail.typeSwitch.restoreHint', 'Switch back without editing to restore the previous setup.')}
-        </p>
-      </AlertDescription>
-    </Alert>
   )
 }
 

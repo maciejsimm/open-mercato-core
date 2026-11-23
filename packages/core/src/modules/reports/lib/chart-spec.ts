@@ -9,6 +9,80 @@ export type ChartSpec = {
   yFields: string[]
   stacked?: boolean
   showLegend?: boolean
+  /** Optional named DS chart colors (`blue`, `emerald`, …) overriding the default palette. */
+  palette?: string[]
+}
+
+/**
+ * Default series palette: named DS chart tokens resolved by `resolveChartColor`
+ * from `@open-mercato/ui/backend/charts/ChartUtils`. Ordered for contrast between
+ * neighbouring series rather than following the theme's `--chart-1..5` ramp.
+ */
+export const REPORT_CHART_PALETTE: readonly string[] = [
+  'blue',
+  'emerald',
+  'violet',
+  'amber',
+  'rose',
+  'cyan',
+  'indigo',
+  'pink',
+  'teal',
+  'orange',
+]
+
+/** Palette for a spec: the persisted `palette` when set, the default otherwise. */
+export function chartPaletteFor(spec: Pick<ChartSpec, 'palette'>): readonly string[] {
+  const custom = (spec.palette ?? []).filter((name) => typeof name === 'string' && name.length > 0)
+  return custom.length > 0 ? custom : REPORT_CHART_PALETTE
+}
+
+/** Color name for the `index`-th series (wraps around the palette). */
+export function chartColorName(palette: readonly string[], index: number): string {
+  const source = palette.length > 0 ? palette : REPORT_CHART_PALETTE
+  return source[((index % source.length) + source.length) % source.length]
+}
+
+export type DataLabelsMode = 'auto' | boolean
+
+/** Above this many points, automatic data labels would overlap. */
+export const AUTO_DATA_LABEL_MAX_POINTS = 12
+
+/**
+ * Whether value labels are drawn on the marks. `auto` labels a single,
+ * unstacked bar series with few enough points to stay legible.
+ */
+export function shouldShowDataLabels(
+  mode: DataLabelsMode | undefined,
+  input: { kind: ChartRenderPlan['kind']; pointCount: number; seriesCount: number; stacked?: boolean },
+): boolean {
+  if (mode === true) return input.pointCount > 0
+  if (mode === false) return false
+  return (
+    input.kind === 'bar' &&
+    input.seriesCount === 1 &&
+    !input.stacked &&
+    input.pointCount > 0 &&
+    input.pointCount <= AUTO_DATA_LABEL_MAX_POINTS
+  )
+}
+
+/** True when the plan has nothing numeric to plot. */
+export function isChartPlanEmpty(plan: ChartRenderPlan): boolean {
+  if (plan.kind === 'pie' || plan.kind === 'donut') return plan.data.length === 0
+  if (plan.kind === 'scatter') return plan.series.every((s) => s.data.length === 0)
+  let keys: string[] = []
+  if (plan.kind === 'combo') keys = plan.series.map((s) => s.key)
+  else if (plan.kind === 'bar' || plan.kind === 'line' || plan.kind === 'area') keys = plan.categories
+  if (plan.data.length === 0 || keys.length === 0) return true
+  return !plan.data.some((row) => keys.some((key) => coerceNumber(row[key]) !== undefined))
+}
+
+/** Shorten a long category label for an axis tick; the tooltip keeps the full value. */
+export function truncateAxisLabel(label: unknown, max = 18): string {
+  const text = label === null || label === undefined ? '' : String(label)
+  if (text.length <= max) return text
+  return `${text.slice(0, Math.max(1, max - 1))}…`
 }
 
 /**
