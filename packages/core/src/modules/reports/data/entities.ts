@@ -32,7 +32,7 @@ export class ReportFolder {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
@@ -70,7 +70,7 @@ export class ReportFolderShare {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 }
 
@@ -119,7 +119,7 @@ export class ReportDashboard {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
@@ -169,7 +169,7 @@ export class ReportEmbed {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
@@ -192,6 +192,10 @@ export class ReportSchedule {
 
   @Property({ name: 'tenant_id', type: 'uuid' })
   tenantId!: string
+
+  /** Principal the schedule executes as (live ACL at run time). Null on rows created before 2026-11-23 → report owner. */
+  @Property({ name: 'owner_user_id', type: 'uuid', nullable: true })
+  ownerUserId?: string | null
 
   @Property({ name: 'report_id', type: 'uuid' })
   reportId!: string
@@ -229,7 +233,7 @@ export class ReportSchedule {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
@@ -288,7 +292,7 @@ export class Report {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
-  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date(), nullable: true })
+  @Property({ name: 'updated_at', type: Date, onCreate: () => new Date(), onUpdate: () => new Date(), nullable: true })
   updatedAt?: Date | null
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
@@ -342,6 +346,14 @@ export class ReportExecution {
 
   @Property({ name: 'result_blob_id', type: 'uuid', nullable: true })
   resultBlobId?: string | null
+
+  /** Async run result rows (bounded by `OM_REPORTS_ASYNC_CAP`), served by the execution download route. */
+  @Property({ name: 'result_json', type: 'json', nullable: true })
+  resultJson?: Record<string, unknown>[] | null
+
+  /** Execution meta (column descriptors, truncation, definition snapshot) for the stored result. */
+  @Property({ name: 'result_meta_json', type: 'json', nullable: true })
+  resultMetaJson?: Record<string, unknown> | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

@@ -4,7 +4,8 @@ import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import type { CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
-import { ReportEmbed } from '../data/entities'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { Report, ReportDashboard, ReportEmbed } from '../data/entities'
 import {
   embedCreateSchema,
   embedDeleteSchema,
@@ -14,6 +15,12 @@ import {
   type EmbedUpdateInput,
 } from '../data/validators'
 import { requireTenant } from './shared'
+import {
+  getEmbedHostSpot,
+  readParameterDefs,
+  validateEmbedConfig,
+  type EmbedBindings,
+} from '../lib/embed-spots'
 
 const embedIndexer: CrudIndexerConfig<ReportEmbed> = {
   entityType: 'reports:embed',
@@ -29,18 +36,73 @@ const embedEvents: CrudEventsConfig<ReportEmbed> = {
   }),
 }
 
+type EmbedTarget = {
+  hostSpotId: string
+  hostEntityId?: string | null
+  artifactType: 'report' | 'dashboard'
+  artifactId: string
+  paramBindings: EmbedBindings
+}
+
+/**
+ * Reject embeds that could never render: a spot outside the host-spot
+ * registry, an artifact missing from the caller's scope, or bindings that do
+ * not match the artifact's declared parameters. Returns the host entity id
+ * derived from the spot.
+ */
+export async function assertValidEmbedTarget(
+  em: EntityManager,
+  scope: { tenantId: string; organizationId: string },
+  target: EmbedTarget,
+): Promise<string> {
+  const where = { id: target.artifactId, tenantId: scope.tenantId, organizationId: scope.organizationId, deletedAt: null }
+  const artifact = target.artifactType === 'dashboard'
+    ? await findOneWithDecryption(em, ReportDashboard, where as Record<string, unknown>, undefined, scope)
+    : await findOneWithDecryption(em, Report, where as Record<string, unknown>, undefined, scope)
+  if (!artifact) {
+    throw new CrudHttpError(400, {
+      error: 'Embedded artifact not found',
+      code: 'EMBED_ARTIFACT_NOT_FOUND',
+      fieldErrors: { artifactId: 'Embedded artifact not found' },
+    })
+  }
+  const issues = validateEmbedConfig({
+    hostSpotId: target.hostSpotId,
+    hostEntityId: target.hostEntityId,
+    paramBindings: target.paramBindings,
+    parameters: readParameterDefs(artifact.parametersJson),
+  })
+  if (issues.length > 0) {
+    throw new CrudHttpError(400, {
+      error: issues[0].message,
+      code: 'EMBED_INVALID',
+      issues,
+      fieldErrors: Object.fromEntries(issues.map((issue) => [issue.path, issue.message])),
+    })
+  }
+  const spot = getEmbedHostSpot(target.hostSpotId)
+  return spot ? spot.hostEntityId : (target.hostEntityId ?? '')
+}
+
 const createEmbedCommand: CommandHandler<EmbedCreateInput, { embedId: string }> = {
   id: 'reports.embed.create',
   async execute(rawInput, ctx) {
     const input = embedCreateSchema.parse(rawInput)
     const { tenantId, organizationId } = requireTenant(ctx)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
+    const hostEntityId = await assertValidEmbedTarget(em, { tenantId, organizationId }, {
+      hostSpotId: input.hostSpotId,
+      hostEntityId: input.hostEntityId,
+      artifactType: input.artifactType,
+      artifactId: input.artifactId,
+      paramBindings: input.paramBindings ?? {},
+    })
 
     const embed = em.create(ReportEmbed, {
       organizationId,
       tenantId,
       hostSpotId: input.hostSpotId,
-      hostEntityId: input.hostEntityId,
+      hostEntityId,
       artifactType: input.artifactType,
       artifactId: input.artifactId,
       paramBindingsJson: input.paramBindings ?? {},
@@ -85,11 +147,26 @@ const updateEmbedCommand: CommandHandler<EmbedUpdateInput, { embedId: string }> 
     } as Record<string, unknown>)
     if (!embed) throw new CrudHttpError(404, { error: 'Embed not found' })
 
-    if (input.hostSpotId !== undefined) embed.hostSpotId = input.hostSpotId
-    if (input.hostEntityId !== undefined) embed.hostEntityId = input.hostEntityId
-    if (input.artifactType !== undefined) embed.artifactType = input.artifactType
-    if (input.artifactId !== undefined) embed.artifactId = input.artifactId
-    if (input.paramBindings !== undefined) embed.paramBindingsJson = input.paramBindings
+    const touchesTarget = input.hostSpotId !== undefined
+      || input.hostEntityId !== undefined
+      || input.artifactType !== undefined
+      || input.artifactId !== undefined
+      || input.paramBindings !== undefined
+    if (touchesTarget) {
+      const nextSpotId = input.hostSpotId ?? embed.hostSpotId
+      const hostEntityId = await assertValidEmbedTarget(em, { tenantId, organizationId }, {
+        hostSpotId: nextSpotId,
+        hostEntityId: input.hostEntityId ?? (input.hostSpotId !== undefined ? undefined : embed.hostEntityId),
+        artifactType: input.artifactType ?? embed.artifactType,
+        artifactId: input.artifactId ?? embed.artifactId,
+        paramBindings: input.paramBindings ?? (embed.paramBindingsJson as EmbedBindings | null) ?? {},
+      })
+      embed.hostSpotId = nextSpotId
+      embed.hostEntityId = hostEntityId
+      if (input.artifactType !== undefined) embed.artifactType = input.artifactType
+      if (input.artifactId !== undefined) embed.artifactId = input.artifactId
+      if (input.paramBindings !== undefined) embed.paramBindingsJson = input.paramBindings
+    }
     if (input.displayTitle !== undefined) embed.displayTitle = input.displayTitle ?? null
     if (input.position !== undefined) embed.position = input.position
     if (input.enabled !== undefined) embed.enabled = input.enabled

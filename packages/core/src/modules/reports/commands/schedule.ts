@@ -14,7 +14,42 @@ import {
   type ScheduleUpdateInput,
 } from '../data/validators'
 import { parseCadence, computeNextRunAt } from '../lib/schedule-cadence'
-import { requireTenant } from './shared'
+import { isReportsAdmin } from '../lib/folder-acl'
+import { canRunReport } from '../lib/report-access'
+import type { ReportsAccess } from '../lib/access'
+import { loadCommandAccess, requireTenant } from './shared'
+
+type RecipientLike = { type: string }
+
+/**
+ * Schedules run as their owner (live ACL). The owner must be able to run
+ * the report, and delivering to external email addresses requires
+ * `reports.admin` — otherwise any `reports.schedule` holder could mail
+ * tenant data outside the organization.
+ */
+async function assertScheduleAllowed(
+  em: EntityManager,
+  access: ReportsAccess,
+  report: Report,
+  recipients: readonly RecipientLike[] | undefined,
+): Promise<void> {
+  if (!(await canRunReport(em, report, access))) {
+    throw new CrudHttpError(403, { error: 'You cannot schedule a report you cannot run', code: 'REPORT_FOLDER_FORBIDDEN' })
+  }
+  if (recipients?.some((r) => r.type === 'email') && !isReportsAdmin(access.userFeatures)) {
+    throw new CrudHttpError(403, {
+      error: 'Only reports administrators can deliver schedules to external email addresses',
+      code: 'REPORT_SCHEDULE_EXTERNAL_RECIPIENT_FORBIDDEN',
+    })
+  }
+}
+
+/** Owner, or report owner for legacy rows, or reports.admin may change a schedule. */
+function canManageSchedule(schedule: ReportSchedule, report: Report | null, access: ReportsAccess): boolean {
+  if (isReportsAdmin(access.userFeatures)) return true
+  const owner = schedule.ownerUserId ?? report?.ownerUserId ?? null
+  return owner === access.userId
+}
 
 const scheduleIndexer: CrudIndexerConfig<ReportSchedule> = { entityType: 'reports:schedule' }
 const scheduleEvents: CrudEventsConfig<ReportSchedule> = {
@@ -48,10 +83,13 @@ const createScheduleCommand: CommandHandler<ScheduleCreateInput, { scheduleId: s
       deletedAt: null,
     } as Record<string, unknown>)
     if (!report) throw new CrudHttpError(404, { error: 'Report not found' })
+    const access = await loadCommandAccess(ctx, em, tenantId, organizationId)
+    await assertScheduleAllowed(em, access, report, input.recipients)
 
     const schedule = em.create(ReportSchedule, {
       organizationId,
       tenantId,
+      ownerUserId: access.userId,
       reportId: input.reportId,
       name: input.name,
       cadence: input.cadence,
@@ -99,6 +137,17 @@ const updateScheduleCommand: CommandHandler<ScheduleUpdateInput, { scheduleId: s
       deletedAt: null,
     } as Record<string, unknown>)
     if (!schedule) throw new CrudHttpError(404, { error: 'Schedule not found' })
+    const report = await em.findOne(Report, {
+      id: schedule.reportId,
+      tenantId,
+      organizationId,
+      deletedAt: null,
+    } as Record<string, unknown>)
+    const access = await loadCommandAccess(ctx, em, tenantId, organizationId)
+    if (!canManageSchedule(schedule, report, access)) throw new CrudHttpError(403, { error: 'Forbidden' })
+    if (report && (input.recipients !== undefined || input.enabled === true)) {
+      await assertScheduleAllowed(em, access, report, input.recipients ?? (schedule.recipientsJson as RecipientLike[]))
+    }
 
     let cadenceChanged = false
     if (input.name !== undefined) schedule.name = input.name
@@ -155,6 +204,13 @@ const deleteScheduleCommand: CommandHandler<ScheduleDeleteInput, { scheduleId: s
       deletedAt: null,
     } as Record<string, unknown>)
     if (!schedule) throw new CrudHttpError(404, { error: 'Schedule not found' })
+    const report = await em.findOne(Report, {
+      id: schedule.reportId,
+      tenantId,
+      organizationId,
+    } as Record<string, unknown>)
+    const access = await loadCommandAccess(ctx, em, tenantId, organizationId)
+    if (!canManageSchedule(schedule, report, access)) throw new CrudHttpError(403, { error: 'Forbidden' })
 
     schedule.deletedAt = new Date()
     schedule.enabled = false

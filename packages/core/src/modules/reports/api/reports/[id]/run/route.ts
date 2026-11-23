@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { resolveReportsRequestAccess } from '../../../../lib/access'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ReportDefinition, ParameterDef } from '@open-mercato/shared/modules/reports/dsl'
 import { Report, ReportFolder, ReportFolderShare } from '../../../../data/entities'
 import { reportRunSchema } from '../../../../data/validators'
 import { loadDataset } from '../../../../lib/datasets-registry'
-import { shouldDispatchAsync } from '../../../../lib/execute'
+import { estimateReportRows, shouldDispatchAsync } from '../../../../lib/execute'
+import { dispatchAsyncRun } from '../../../../lib/async-run'
 import { FieldAclDeniedError } from '../../../../lib/field-redact'
 import { executeReportCached, type ReportsCacheService } from '../../../../lib/result-cache'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../../../lib/folder-acl'
@@ -27,13 +26,10 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
     )
   }
 
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } },
-      { status: 401 },
-    )
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   let body: unknown = {}
   try {
@@ -49,20 +45,13 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
     )
   }
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
-  const rbac = container.resolve('rbacService') as RbacService
 
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   const report = await em.findOne(Report, {
     id: reportId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!report) {
@@ -74,8 +63,8 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
 
   const folder = await em.findOne(ReportFolder, {
     id: report.folderId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!folder) {
@@ -86,8 +75,8 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   }
   const shares = await em.find(ReportFolderShare, { folderId: folder.id } as Record<string, unknown>)
   const aclCtx: FolderAclContext = {
-    userId: auth.sub,
-    roleIds: new Set<string>(Array.isArray(auth.roles) ? auth.roles : []),
+    userId: access.userId,
+    roleIds: access.roleIds,
     userFeatures,
     shares: shares.map((s) => ({
       id: s.id,
@@ -128,23 +117,45 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   const requestedMode = parsedBody.data.mode
   const parameterDefs = (report.parametersJson as ParameterDef[] | undefined) ?? undefined
 
-  // Async dispatch heuristic — Phase 1 returns 202 telling the client to retry
-  // once the Phase 4 worker is available. The execute orchestrator still does
-  // its own truncation check below.
-  const asyncDecision = shouldDispatchAsync(0, requestedMode)
-  if (asyncDecision && asyncDecision.reason === 'requested') {
+  const queryEngine = container.resolve('queryEngine') as QueryEngine
+  const executionInput = {
+    dataset,
+    definition,
+    userFeatures,
+    userId: access.userId,
+    tenantId: access.tenantId,
+    organizationId,
+    params,
+    parameterDefs,
+    page: parsedBody.data.page,
+  }
+
+  // Size probe (pageSize: 1 → total) decides sync vs async, so over-cap
+  // reports never aggregate a silently truncated row set in the request.
+  let estimatedRows = 0
+  try {
+    estimatedRows = requestedMode === 'async' ? 0 : await estimateReportRows(queryEngine, executionInput)
+  } catch (err) {
+    if (!(err instanceof FieldAclDeniedError)) throw err
+  }
+  const asyncDecision =
+    definition.type === 'flat_list' && requestedMode !== 'async'
+      ? null
+      : shouldDispatchAsync(estimatedRows, requestedMode)
+  if (asyncDecision) {
+    const executionId = await dispatchAsyncRun({ em, report, access, params })
     return NextResponse.json(
       {
         mode: 'async',
-        executionId: report.id,
-        progressJobId: null,
-        message: 'Async dispatch is wired in Phase 4. The current request would have been queued.',
+        executionId,
+        reason: asyncDecision.reason,
+        estimatedRows: asyncDecision.estimatedRows,
+        cap: asyncDecision.cap,
       },
       { status: 202 },
     )
   }
 
-  const queryEngine = container.resolve('queryEngine') as QueryEngine
   let cacheService: ReportsCacheService | null = null
   try {
     cacheService = container.resolve('cacheService') as ReportsCacheService
@@ -154,15 +165,7 @@ export async function POST(req: Request, ctx: { params?: { id?: string } }) {
   try {
     const out = await executeReportCached(
       queryEngine,
-      {
-        dataset,
-        definition,
-        userFeatures,
-        tenantId: auth.tenantId,
-        organizationId: auth.orgId ?? '',
-        params,
-        parameterDefs,
-      },
+      executionInput,
       {
         cache: cacheService,
         reportId: report.id,
@@ -206,7 +209,7 @@ export const openApi = {
       tags: [reportsTag],
       responses: [
         { status: 200, description: 'Sync execution result' },
-        { status: 202, description: 'Async dispatch (Phase 4)' },
+        { status: 202, description: 'Dispatched to the async worker (over the in-memory cap, or mode=async); poll GET /api/reports/executions/:executionId' },
       ],
       errors: [
         { status: 400, description: 'Invalid run body', schema: reportsErrorSchema },

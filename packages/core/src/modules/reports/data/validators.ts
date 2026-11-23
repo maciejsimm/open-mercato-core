@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { measureAlias } from '@open-mercato/shared/modules/reports/dsl'
+import { isKnownEmbedSpot } from '../lib/embed-spots'
+import { isValidCadence, isValidTimeZone } from '../lib/schedule-cadence'
 
 const uuid = () => z.string().uuid()
 
@@ -135,10 +138,20 @@ const filterSchema: z.ZodType<FilterShape> = z.lazy(() =>
   ]),
 )
 
+export const fieldFormatSchema = z.object({
+  precision: z.number().int().min(0).max(10).optional(),
+  dateStyle: z.enum(['short', 'medium', 'long']).optional(),
+  percent: z.boolean().optional(),
+  compact: z.boolean().optional(),
+})
+
+export const columnFormatsSchema = z.record(z.string().min(1).max(200), fieldFormatSchema)
+
 const flatListDefinitionSchema = z.object({
   type: z.literal('flat_list'),
   fields: z.array(z.string().min(1)).min(1).max(100),
   filters: z.array(filterSchema).default([]),
+  columnFormats: columnFormatsSchema.optional(),
   sort: z.array(sortSchema).default([]),
   limit: z.number().int().min(1).max(100_000).optional(),
 })
@@ -201,6 +214,7 @@ const groupedDefinitionSchema = z
     groupBy: groupByListSchema,
     measures: measuresListSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
     sort: z.array(sortSchema).default([]),
     limit: z.number().int().min(1).max(100_000).optional(),
   })
@@ -226,6 +240,7 @@ const pivotDefinitionSchema = z
     cols: z.array(z.string().min(1)).min(1).max(10),
     value: measureExprSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
   })
   .superRefine((def, ctx) => {
     const rows = new Set(def.rows)
@@ -245,6 +260,7 @@ const chartDefinitionSchema = z
     type: z.literal('chart'),
     chart: chartSpecSchema,
     filters: z.array(filterSchema).default([]),
+    columnFormats: columnFormatsSchema.optional(),
     groupBy: z.array(z.string().min(1)).max(10).optional(),
     measures: z.array(measureExprSchema).max(20).optional(),
     limit: z.number().int().min(1).max(100_000).optional(),
@@ -260,7 +276,7 @@ const chartDefinitionSchema = z
       })
     }
     if (def.measures && def.measures.length > 0) {
-      const aliases = new Set(def.measures.map((m) => m.alias ?? `${m.aggregation}_${m.field}`))
+      const aliases = new Set(def.measures.map((m) => measureAlias(m)))
       for (const y of yFields) {
         if (!aliases.has(y)) {
           ctx.addIssue({
@@ -277,6 +293,7 @@ const summaryDefinitionSchema = z.object({
   type: z.literal('summary'),
   measures: measuresListSchema,
   filters: z.array(filterSchema).default([]),
+  columnFormats: columnFormatsSchema.optional(),
 })
 
 export const reportDefinitionSchema = z.discriminatedUnion('type', [
@@ -338,6 +355,7 @@ export type ReportMoveInput = z.infer<typeof reportMoveSchema>
 export const reportRunSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
   mode: z.enum(['sync', 'async']).optional(),
+  page: z.number().int().min(1).max(10_000).optional(),
 })
 export type ReportRunInput = z.infer<typeof reportRunSchema>
 
@@ -446,11 +464,18 @@ const embedParamBindingSchema = z.union([
   z.object({ source: z.literal('record-field'), recordField: z.string().min(1).max(120) }),
 ])
 
-const embedSpotPattern = /^[a-zA-Z][a-zA-Z0-9_:.\-]+$/
+const embedSpotSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((value) => isKnownEmbedSpot(value), {
+    message: 'hostSpotId must be one of the registered embed spots',
+  })
 
 export const embedCreateSchema = z.object({
-  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern, { message: 'hostSpotId must look like a widget spot id' }),
-  hostEntityId: z.string().min(1).max(120),
+  hostSpotId: embedSpotSchema,
+  /** Derived from `hostSpotId` when omitted; must match the spot's entity when given. */
+  hostEntityId: z.string().min(1).max(120).optional(),
   artifactType: embedArtifactTypeSchema,
   artifactId: uuid(),
   paramBindings: z.record(z.string(), embedParamBindingSchema).optional(),
@@ -462,7 +487,7 @@ export type EmbedCreateInput = z.infer<typeof embedCreateSchema>
 
 export const embedUpdateSchema = z.object({
   id: uuid(),
-  hostSpotId: z.string().min(1).max(200).regex(embedSpotPattern).optional(),
+  hostSpotId: embedSpotSchema.optional(),
   hostEntityId: z.string().min(1).max(120).optional(),
   artifactType: embedArtifactTypeSchema.optional(),
   artifactId: uuid().optional(),
@@ -482,20 +507,19 @@ export type EmbedDeleteInput = z.infer<typeof embedDeleteSchema>
 
 /**
  * Cadence formats recognized by `parseCadence` and the workers:
- *  - `weekly:<dow>@<HH:MM>`   e.g. `weekly:mon@09:00`
- *  - `monthly:<day>@<HH:MM>`  e.g. `monthly:1@09:00` (day 1..28)
- *  - `cron:<expression>`      free-form cron expression evaluated by the worker
+ *  - `daily@<HH:MM>`                e.g. `daily@09:00`
+ *  - `weekly:<dow>[,<dow>…]@<HH:MM>` e.g. `weekly:mon@09:00`, `weekly:mon,wed@09:00`
+ *  - `monthly:<day>@<HH:MM>`        e.g. `monthly:1@09:00` (day 1..28 or `last`)
+ *  - `cron:<expression>`            standard 5-field cron expression
  */
-const cadenceWeeklyPattern = /^weekly:(mon|tue|wed|thu|fri|sat|sun)@([01]\d|2[0-3]):[0-5]\d$/
-const cadenceMonthlyPattern = /^monthly:(?:[1-9]|1\d|2[0-8])@([01]\d|2[0-3]):[0-5]\d$/
-const cadenceCronPattern = /^cron:.+$/
+const cadenceSchema = z.string().trim().min(1).max(200).refine(
+  (value) => isValidCadence(value),
+  { message: 'Cadence must be `daily@<HH:MM>`, `weekly:<dow>[,<dow>…]@<HH:MM>`, `monthly:<1..28|last>@<HH:MM>`, or `cron:<5-field expression>`' },
+)
 
-const cadenceSchema = z.string().min(1).max(200).refine(
-  (value) =>
-    cadenceWeeklyPattern.test(value) ||
-    cadenceMonthlyPattern.test(value) ||
-    cadenceCronPattern.test(value),
-  { message: 'Cadence must be `weekly:<dow>@<HH:MM>`, `monthly:<day>@<HH:MM>`, or `cron:<expr>`' },
+const timezoneSchema = z.string().trim().min(1).max(80).refine(
+  (value) => isValidTimeZone(value),
+  { message: 'Timezone must be a valid IANA timezone name' },
 )
 
 const recipientSchema = z.union([
@@ -505,13 +529,20 @@ const recipientSchema = z.union([
 ])
 export type ScheduleRecipient = z.infer<typeof recipientSchema>
 
-const scheduleFormatsSchema = z.array(z.enum(['csv', 'xlsx'])).min(1).max(2)
+export const SCHEDULE_FORMATS = ['csv', 'xlsx', 'json', 'xml', 'markdown'] as const
+export type ScheduleFormat = (typeof SCHEDULE_FORMATS)[number]
+
+const scheduleFormatsSchema = z
+  .array(z.enum(SCHEDULE_FORMATS))
+  .min(1)
+  .max(SCHEDULE_FORMATS.length)
+  .refine((formats) => new Set(formats).size === formats.length, { message: 'Formats must be unique' })
 
 export const scheduleCreateSchema = z.object({
   reportId: uuid(),
   name: nameSchema,
   cadence: cadenceSchema,
-  timezone: z.string().min(1).max(80),
+  timezone: timezoneSchema,
   recipients: z.array(recipientSchema).min(1).max(50),
   params: z.record(z.string(), z.unknown()).optional(),
   formats: scheduleFormatsSchema.optional(),
@@ -523,7 +554,7 @@ export const scheduleUpdateSchema = z.object({
   id: uuid(),
   name: nameSchema.optional(),
   cadence: cadenceSchema.optional(),
-  timezone: z.string().min(1).max(80).optional(),
+  timezone: timezoneSchema.optional(),
   recipients: z.array(recipientSchema).min(1).max(50).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   formats: scheduleFormatsSchema.optional(),

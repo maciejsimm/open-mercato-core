@@ -1,28 +1,37 @@
 "use client"
 
 import * as React from 'react'
+import Link from 'next/link'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
-import { ReportChart } from '../../../widgets/ReportChart'
+import type { ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
 import type { ChartSpec } from '../../../lib/chart-spec'
+import {
+  EMBED_HOST_SPOTS,
+  getEmbedHostSpot,
+  getEmbedHostSpotForEntity,
+  readHostRecordField,
+  resolveEmbedParams,
+  withHostRecordId,
+  type EmbedBinding,
+  type EmbedBindings,
+} from '../../../lib/embed-spots'
+import { ReportResultView, readRunMeta } from './ReportResultView'
 
 /**
- * `record-embed-host` widget — Step 3.11.
+ * `record-embed-host` widget — Step 3.11 / F17.
  *
- * Renders the configured `reports_embeds` rows that match the host spot
- * + entity id. For each embed, resolves params from the host record
- * (per `paramBindings.record-field`) plus any literal overrides, runs
- * the underlying report or dashboard, and renders the result inline.
+ * Renders the configured `reports_embeds` rows for the host spot. The spot is
+ * resolved from the host-spot registry (`lib/embed-spots.ts`): `InjectionSpot`
+ * does not pass its spot id to widgets, so the widget matches the host page's
+ * `context.resourceKind` (e.g. `customers.person`) to a registered spot.
+ * Parameters come from the embed's bindings (record field or fixed value);
+ * values render through `formatReportValue`.
  *
- * Field-ACL is enforced server-side (via /api/reports/reports/[id]/run
- * + /api/reports/dashboards/[id]/run); when access is denied the
- * affected card shows a localized "Insufficient access" notice.
+ * Field-ACL is enforced server-side by the run routes; an ACL denial shows a
+ * localized "Insufficient access" notice on the affected card.
  */
-
-type EmbedBinding =
-  | { source: 'literal'; value: unknown }
-  | { source: 'record-field'; recordField: string }
 
 type EmbedRow = {
   id: string
@@ -40,88 +49,63 @@ type ReportRunResponse = {
   mode?: string
   rows?: Array<Record<string, unknown>>
   total?: number
-  meta?: { fields?: string[] }
+  meta?: unknown
   error?: { code?: string; message?: string }
 }
 
+type DashboardTileResult =
+  | { tileId: string; reportId: string; mode: string; rows: Record<string, unknown>[]; total: number; meta: unknown }
+  | { tileId: string; reportId: string; mode: string; error: { code: string; message: string } }
+
 type DashboardRunResponse = {
   mode?: string
-  tiles?: Array<
-    | { tileId: string; reportId: string; mode: string; rows: Record<string, unknown>[]; total: number; meta: Record<string, unknown> }
-    | { tileId: string; reportId: string; mode: string; error: { code: string; message: string } }
-  >
+  tiles?: DashboardTileResult[]
   error?: { code?: string; message?: string }
 }
 
 type HostContext = {
   spotId?: string
-  /** Some hosts also pass `data` separately — we read recordId from either. */
+  resourceKind?: string
+  resourceId?: string
+  recordId?: string
   pageContext?: { recordId?: string; entityId?: string }
 }
 
 type HostData = Record<string, unknown> | null | undefined
 
-const SPOT_TO_ENTITY: Record<string, string> = {
-  'detail:customers.person:after-header': 'customers.person',
-  'detail:customers.company:after-header': 'customers.company',
-}
+/** @deprecated Use the host-spot registry in `lib/embed-spots.ts`. */
+const SPOT_TO_ENTITY: Record<string, string> = Object.fromEntries(
+  EMBED_HOST_SPOTS.map((spot) => [spot.spotId, spot.hostEntityId]),
+)
 
-function inferSpotId(context: HostContext | undefined, fallback: string): string {
-  if (context?.spotId && typeof context.spotId === 'string') return context.spotId
-  return fallback
-}
-
-function readRecordField(data: HostData, field: string): unknown {
-  if (!data || typeof data !== 'object') return undefined
-  // Support dotted paths like `person.id` / `company.id`.
-  if (!field.includes('.')) {
-    return (data as Record<string, unknown>)[field]
-  }
-  let cur: unknown = data
-  for (const part of field.split('.')) {
-    if (cur === null || cur === undefined || typeof cur !== 'object') return undefined
-    cur = (cur as Record<string, unknown>)[part]
-  }
-  return cur
+export function resolveHostSpotId(spotId: string | undefined, context: HostContext | undefined): string | null {
+  if (spotId && getEmbedHostSpot(spotId)) return spotId
+  if (context?.spotId && getEmbedHostSpot(context.spotId)) return context.spotId
+  const entity = context?.resourceKind ?? context?.pageContext?.entityId
+  return getEmbedHostSpotForEntity(entity)?.spotId ?? null
 }
 
 function inferRecordId(data: HostData, context: HostContext | undefined): string | null {
-  const fromContext = context?.pageContext?.recordId
-  if (typeof fromContext === 'string' && fromContext.length > 0) return fromContext
+  for (const fromContext of [context?.pageContext?.recordId, context?.resourceId, context?.recordId]) {
+    if (typeof fromContext === 'string' && fromContext.length > 0) return fromContext
+  }
   if (!data || typeof data !== 'object') return null
   const obj = data as Record<string, unknown>
   const direct = obj.id ?? obj.recordId
   if (typeof direct === 'string' && direct.length > 0) return direct
-  // Common detail-page wrappers expose nested entities.
-  for (const key of ['person', 'company', 'record']) {
-    const inner = obj[key]
-    if (inner && typeof inner === 'object') {
-      const innerId = (inner as Record<string, unknown>).id
-      if (typeof innerId === 'string' && innerId.length > 0) return innerId
-    }
+  for (const key of ['person', 'company', 'deal', 'record']) {
+    const innerId = readHostRecordField(obj, `${key}.id`)
+    if (typeof innerId === 'string' && innerId.length > 0) return innerId
   }
   return null
 }
 
-function resolveParams(
-  bindings: Record<string, EmbedBinding> | undefined,
-  data: HostData,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (!bindings) return out
-  for (const [paramKey, binding] of Object.entries(bindings)) {
-    if (binding.source === 'literal') {
-      out[paramKey] = binding.value
-    } else if (binding.source === 'record-field') {
-      const value = readRecordField(data, binding.recordField)
-      if (value !== undefined) out[paramKey] = value
-    }
-  }
-  return out
+/** @deprecated Use `resolveEmbedParams` from `lib/embed-spots.ts`. */
+function resolveParams(bindings: EmbedBindings | undefined, data: HostData): Record<string, unknown> {
+  return resolveEmbedParams(bindings, data)
 }
 
 export type RecordEmbedHostProps = {
-  /** The host spot id (e.g. `detail:customers.person:after-header`). */
   spotId?: string
   context?: HostContext
   data?: HostData
@@ -132,10 +116,11 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
   const tRef = React.useRef(t)
   React.useEffect(() => { tRef.current = t }, [t])
 
-  const resolvedSpotId = inferSpotId(context, spotId ?? '')
-  const hostEntityId = SPOT_TO_ENTITY[resolvedSpotId] ?? context?.pageContext?.entityId ?? ''
-
+  const resolvedSpotId = resolveHostSpotId(spotId, context)
   const recordId = inferRecordId(data, context)
+  const hostEntityId = recordId ? getEmbedHostSpot(resolvedSpotId)?.hostEntityId ?? '' : ''
+  const hostData = React.useMemo(() => withHostRecordId(data, recordId), [data, recordId])
+
   const [embeds, setEmbeds] = React.useState<EmbedRow[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
   const [loadError, setLoadError] = React.useState<string | null>(null)
@@ -152,7 +137,7 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
       setLoadError(null)
       try {
         const params = new URLSearchParams({
-          spot: resolvedSpotId,
+          spot: resolvedSpotId ?? '',
           hostEntityId,
           enabledOnly: '1',
           pageSize: '20',
@@ -168,12 +153,10 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
           setEmbeds([])
           return
         }
-        const items = Array.isArray(call.result?.items) ? call.result!.items! : []
-        setEmbeds(items)
+        setEmbeds(Array.isArray(call.result?.items) ? call.result!.items! : [])
       } catch (err) {
         if (cancelled) return
-        const message = err instanceof Error ? err.message : tRef.current('reports.embed.error.load', 'Failed to load embeds.')
-        setLoadError(message)
+        setLoadError(err instanceof Error ? err.message : tRef.current('reports.embed.error.load', 'Failed to load embeds.'))
       } finally {
         if (!cancelled) setIsLoading(false)
       }
@@ -203,81 +186,121 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
   return (
     <section className="space-y-4">
       {embeds.map((embed) => (
-        <EmbedCard key={embed.id} embed={embed} hostData={data} recordId={recordId} t={t} />
+        <EmbedCard
+          key={embed.id}
+          artifactType={embed.artifactType}
+          artifactId={embed.artifactId}
+          paramBindings={embed.paramBindings}
+          displayTitle={embed.displayTitle}
+          hostData={hostData}
+        />
       ))}
     </section>
   )
 }
 
-type EmbedCardProps = {
-  embed: EmbedRow
-  hostData: HostData
-  recordId: string | null
-  t: ReturnType<typeof useT>
+export type EmbedCardProps = {
+  artifactType: 'report' | 'dashboard'
+  artifactId: string
+  paramBindings: EmbedBindings
+  displayTitle: string | null
+  hostData: unknown
+  /** Render without the card frame, for hosts that already frame it (dashboard tiles). */
+  bare?: boolean
+  /** Re-runs the artifact whenever it changes. */
+  refreshToken?: number
+  onRunningChange?: (running: boolean) => void
 }
 
-function EmbedCard({ embed, hostData, t }: EmbedCardProps) {
-  const params = React.useMemo(() => resolveParams(embed.paramBindings, hostData), [embed.paramBindings, hostData])
+/**
+ * One embed rendered against a host record. Also used by the configurator
+ * preview and the home-dashboard "Report" widget.
+ */
+export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitle, hostData, bare = false, refreshToken = 0, onRunningChange }: EmbedCardProps) {
+  const t = useT()
+  const tRef = React.useRef(t)
+  React.useEffect(() => { tRef.current = t }, [t])
+  const onRunningChangeRef = React.useRef(onRunningChange)
+  React.useEffect(() => { onRunningChangeRef.current = onRunningChange }, [onRunningChange])
+
+  const params = React.useMemo(() => resolveEmbedParams(paramBindings, hostData), [paramBindings, hostData])
+  const paramsKey = JSON.stringify(params)
   const [result, setResult] = React.useState<ReportRunResponse | DashboardRunResponse | null>(null)
+  const [definition, setDefinition] = React.useState<ReportDefinition | null>(null)
+  const [artifactName, setArtifactName] = React.useState<string | null>(null)
   const [isRunning, setIsRunning] = React.useState(true)
   const [runError, setRunError] = React.useState<string | null>(null)
 
-  const tRef = React.useRef(t)
-  React.useEffect(() => { tRef.current = t }, [t])
+  React.useEffect(() => {
+    let cancelled = false
+    async function loadArtifact() {
+      const listUrl = artifactType === 'dashboard' ? '/api/reports/dashboards' : '/api/reports/reports'
+      const call = await apiCall<{ items?: Array<{ name?: string; definition?: ReportDefinition | null }> }>(
+        `${listUrl}?id=${encodeURIComponent(artifactId)}&pageSize=1`,
+        undefined,
+        { fallback: { items: [] } },
+      )
+      if (cancelled || !call.ok) return
+      const item = Array.isArray(call.result?.items) ? call.result!.items![0] : undefined
+      setArtifactName(item?.name ?? null)
+      setDefinition(item?.definition ?? null)
+    }
+    loadArtifact().catch(() => undefined)
+    return () => { cancelled = true }
+  }, [artifactId, artifactType])
 
   React.useEffect(() => {
     let cancelled = false
     async function run() {
       setIsRunning(true)
+      onRunningChangeRef.current?.(true)
       setRunError(null)
-      const url = embed.artifactType === 'dashboard'
-        ? `/api/reports/dashboards/${encodeURIComponent(embed.artifactId)}/run`
-        : `/api/reports/reports/${encodeURIComponent(embed.artifactId)}/run`
+      const url = artifactType === 'dashboard'
+        ? `/api/reports/dashboards/${encodeURIComponent(artifactId)}/run`
+        : `/api/reports/reports/${encodeURIComponent(artifactId)}/run`
       try {
-        const call = await apiCall<ReportRunResponse | DashboardRunResponse>(
-          url,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ params, mode: 'sync' }),
-          },
-        )
+        const call = await apiCall<ReportRunResponse | DashboardRunResponse>(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ params: JSON.parse(paramsKey) as Record<string, unknown>, mode: 'sync' }),
+        })
         if (cancelled) return
         if (!call.ok) {
           const code = (call.result as { error?: { code?: string } } | null)?.error?.code
-          if (code === 'REPORT_FIELD_ACL_DENIED') {
-            setRunError(tRef.current('reports.embed.error.fieldAcl', 'Insufficient access to render this embed.'))
-          } else {
-            setRunError(tRef.current('reports.embed.error.run', 'Failed to render embed.'))
-          }
+          setRunError(code === 'REPORT_FIELD_ACL_DENIED'
+            ? tRef.current('reports.embed.error.fieldAcl', 'Insufficient access to render this embed.')
+            : tRef.current('reports.embed.error.run', 'Failed to render embed.'))
           return
         }
         setResult(call.result ?? null)
       } catch (err) {
         if (cancelled) return
-        const message = err instanceof Error ? err.message : tRef.current('reports.embed.error.run', 'Failed to render embed.')
-        setRunError(message)
+        setRunError(err instanceof Error ? err.message : tRef.current('reports.embed.error.run', 'Failed to render embed.'))
       } finally {
-        if (!cancelled) setIsRunning(false)
+        if (!cancelled) {
+          setIsRunning(false)
+          onRunningChangeRef.current?.(false)
+        }
       }
     }
     run()
     return () => { cancelled = true }
-    // params is the only meaningful changing key — the embed id stays stable
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embed.id, JSON.stringify(params)])
+  }, [artifactId, artifactType, paramsKey, refreshToken])
 
-  const title = embed.displayTitle ?? t('reports.embed.fallbackTitle', 'Embedded report')
+  const title = displayTitle || artifactName || t('reports.embed.fallbackTitle', 'Embedded report')
+  const openHref = artifactType === 'dashboard'
+    ? `/backend/reports/dashboards/${encodeURIComponent(artifactId)}`
+    : `/backend/reports/${encodeURIComponent(artifactId)}`
 
   return (
-    <article className="rounded-md border border-border bg-card p-4">
-      <header className="mb-3 flex items-center justify-between">
+    <article className={bare ? undefined : 'rounded-md border border-border bg-card p-4'}>
+      <header className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
-        <span className="text-xs text-muted-foreground">
-          {embed.artifactType === 'dashboard'
-            ? t('reports.embed.artifactTypeDashboard', 'Dashboard')
-            : t('reports.embed.artifactTypeReport', 'Report')}
-        </span>
+        <Link href={openHref} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          {artifactType === 'dashboard'
+            ? t('reports.embed.openDashboard', 'Open dashboard')
+            : t('reports.embed.openReport', 'Open report')}
+        </Link>
       </header>
       {isRunning ? (
         <div className="flex items-center justify-center py-6">
@@ -288,100 +311,39 @@ function EmbedCard({ embed, hostData, t }: EmbedCardProps) {
           {runError}
         </div>
       ) : (
-        renderEmbedBody(embed, result, t)
+        <EmbedBody result={result} definition={definition} />
       )}
     </article>
   )
 }
 
-function renderEmbedBody(
-  embed: EmbedRow,
-  result: ReportRunResponse | DashboardRunResponse | null,
-  t: ReturnType<typeof useT>,
-): React.ReactNode {
+function EmbedBody({ result, definition }: { result: ReportRunResponse | DashboardRunResponse | null; definition: ReportDefinition | null }) {
+  const t = useT()
   if (!result) {
     return <p className="text-sm text-muted-foreground">{t('reports.embed.empty', 'No data.')}</p>
   }
-  if ((result as ReportRunResponse).rows) {
-    const r = result as ReportRunResponse
-    if (!r.rows || r.rows.length === 0) {
-      return <p className="text-sm text-muted-foreground">{t('reports.embed.empty', 'No data.')}</p>
-    }
-    return <ResultTable rows={r.rows} fields={r.meta?.fields} />
+  if ('rows' in result && Array.isArray(result.rows)) {
+    return <ReportResultView rows={result.rows} meta={readRunMeta(result.meta)} definition={definition} />
   }
-  const d = result as DashboardRunResponse
-  if (!d.tiles || d.tiles.length === 0) {
+  const tiles = 'tiles' in result && Array.isArray(result.tiles) ? result.tiles : []
+  if (tiles.length === 0) {
     return <p className="text-sm text-muted-foreground">{t('reports.embed.empty', 'No data.')}</p>
   }
   return (
     <div className="space-y-3">
-      {d.tiles.map((tile, idx) => (
-        <DashboardTileCard key={`${embed.id}-${idx}`} tile={tile} t={t} />
-      ))}
+      {tiles.map((tile) =>
+        'error' in tile ? (
+          <div key={tile.tileId} className="rounded-md border border-status-warning-border bg-status-warning-bg px-3 py-2 text-sm text-status-warning-text">
+            {tile.error?.message ?? t('reports.embed.error.run', 'Failed to render embed.')}
+          </div>
+        ) : (
+          <ReportResultView key={tile.tileId} rows={tile.rows} meta={readRunMeta(tile.meta)} />
+        ),
+      )}
     </div>
   )
 }
 
-type DashboardTileCardProps = {
-  tile: NonNullable<DashboardRunResponse['tiles']>[number]
-  t: ReturnType<typeof useT>
-}
-
-function DashboardTileCard({ tile, t }: DashboardTileCardProps) {
-  if ('error' in tile) {
-    return (
-      <div className="rounded-md border border-status-warning-border bg-status-warning-bg px-3 py-2 text-sm text-status-warning-text">
-        {tile.error?.message ?? t('reports.embed.error.run', 'Failed to render embed.')}
-      </div>
-    )
-  }
-  if (tile.rows.length === 0) {
-    return <p className="text-sm text-muted-foreground">{t('reports.embed.empty', 'No data.')}</p>
-  }
-  return <ResultTable rows={tile.rows} fields={Array.isArray((tile.meta as { fields?: unknown }).fields) ? (tile.meta as { fields: string[] }).fields : undefined} />
-}
-
-type ResultTableProps = {
-  rows: Record<string, unknown>[]
-  fields?: string[]
-}
-
-function ResultTable({ rows, fields }: ResultTableProps) {
-  const columns = fields && fields.length > 0
-    ? fields
-    : (rows[0] ? Object.keys(rows[0]) : [])
-  if (columns.length === 0) return null
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-border">
-            {columns.map((col) => (
-              <th key={col} className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">{col}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.slice(0, 25).map((row, idx) => (
-            <tr key={idx} className="border-b border-border/60 last:border-b-0">
-              {columns.map((col) => {
-                const value = row[col]
-                let display: string
-                if (value == null) display = '—'
-                else if (typeof value === 'object') display = JSON.stringify(value)
-                else display = String(value)
-                return <td key={col} className="px-3 py-2 align-top">{display}</td>
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-// Re-export for tests / external consumers.
 export type { EmbedRow }
 export { resolveParams, inferRecordId, SPOT_TO_ENTITY }
-// `ChartSpec` is re-exported so a future polish step can integrate chart rendering directly.
 export type { ChartSpec }

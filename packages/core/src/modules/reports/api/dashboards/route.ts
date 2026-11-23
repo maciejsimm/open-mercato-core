@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server'
+import { resolveReportsRequestAccess } from '../../lib/access'
 import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import { ReportDashboard, ReportFolder, ReportFolderShare } from '../../data/entities'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../lib/folder-acl'
 import { reportsTag, reportsErrorSchema } from '../openapi'
@@ -63,13 +61,10 @@ const crud = makeCrudRoute<CrudInput, CrudInput, Record<string, unknown>>({
 })
 
 export async function GET(req: Request) {
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json(
-      { items: [], total: 0, page: 1, pageSize: 50, totalPages: 1 },
-      { status: 401 },
-    )
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   const url = new URL(req.url)
   const parsed = listQuerySchema.safeParse({
@@ -86,19 +81,12 @@ export async function GET(req: Request) {
     )
   }
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
-  const rbac = container.resolve('rbacService') as RbacService
 
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   const where: Record<string, unknown> = {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   }
   if (parsed.data.id) where.id = parsed.data.id
@@ -117,8 +105,8 @@ export async function GET(req: Request) {
     : []
 
   const ctx: FolderAclContext = {
-    userId: auth.sub,
-    roleIds: new Set<string>(Array.isArray(auth.roles) ? auth.roles : []),
+    userId: access.userId,
+    roleIds: access.roleIds,
     userFeatures,
     shares: shares.map((s) => ({
       id: s.id,

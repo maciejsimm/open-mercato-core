@@ -12,7 +12,7 @@ import { apiRequest, getAuthToken } from '@open-mercato/core/modules/core/__inte
  *   4. `/backend/reports/schedules` list page loads (empty state visible).
  *
  * Deliberately does NOT exercise the schedule-email path — that depends on
- * the deferred Phase 4.3 email module wiring. The full build → save →
+ * the email transport. Aggregation and exports are covered by TC-REPORTS-002/003; the full build → save →
  * schedule → email → embed scenario lives in subsequent specs that will
  * be added when 4.3/4.5 land.
  */

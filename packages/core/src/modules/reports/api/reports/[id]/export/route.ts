@@ -1,19 +1,17 @@
 import { NextResponse } from 'next/server'
+import { resolveReportsRequestAccess } from '../../../../lib/access'
 import { z } from 'zod'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ParameterDef, ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
-import {
-  defaultExportFilename,
-  normalizeExportFormat,
-  type CrudExportFormat,
-} from '@open-mercato/shared/lib/crud/exporters'
 import { Report, ReportFolder, ReportFolderShare } from '../../../../data/entities'
 import { loadDataset } from '../../../../lib/datasets-registry'
-import { runReportExport } from '../../../../lib/export'
+import {
+  REPORT_EXPORT_FORMATS,
+  normalizeReportExportFormat,
+  reportExportFilename,
+  runReportExport,
+} from '../../../../lib/export'
 import { FieldAclDeniedError } from '../../../../lib/field-redact'
 import { canViewFolder, resolveArtifactPermission, type FolderAclContext } from '../../../../lib/folder-acl'
 import { reportsTag, reportsErrorSchema } from '../../../openapi'
@@ -22,7 +20,6 @@ export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['reports.view'] },
 }
 
-const supportedFormats: CrudExportFormat[] = ['csv', 'json', 'xml', 'markdown']
 
 const paramsQuerySchema = z.record(z.string(), z.string()).optional()
 
@@ -37,13 +34,13 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
 
   const url = new URL(req.url)
   const rawFormat = url.searchParams.get('format')
-  const format = normalizeExportFormat(rawFormat) ?? 'csv'
-  if (!supportedFormats.includes(format)) {
+  const format = rawFormat ? normalizeReportExportFormat(rawFormat) : 'csv'
+  if (!format) {
     return NextResponse.json(
       {
         error: {
           code: 'REPORT_EXPORT_FORMAT_UNSUPPORTED',
-          message: `Format '${format}' is not supported yet. Supported: ${supportedFormats.join(', ')}. XLSX ships in Step 3.6b.`,
+          message: `Format '${rawFormat}' is not supported. Supported: ${REPORT_EXPORT_FORMATS.join(', ')}.`,
         },
       },
       { status: 400 },
@@ -60,28 +57,18 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
   // Validate shape — schema is opt-in, this stays best-effort tolerant.
   paramsQuerySchema.safeParse(params)
 
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } },
-      { status: 401 },
-    )
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
-  const rbac = container.resolve('rbacService') as RbacService
 
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   const report = await em.findOne(Report, {
     id: reportId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!report) {
@@ -93,8 +80,8 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
 
   const folder = await em.findOne(ReportFolder, {
     id: report.folderId,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? undefined,
+    tenantId: access.tenantId,
+    organizationId,
     deletedAt: null,
   } as Record<string, unknown>)
   if (!folder) {
@@ -105,8 +92,8 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
   }
   const shares = await em.find(ReportFolderShare, { folderId: folder.id } as Record<string, unknown>)
   const aclCtx: FolderAclContext = {
-    userId: auth.sub,
-    roleIds: new Set<string>(Array.isArray(auth.roles) ? auth.roles : []),
+    userId: access.userId,
+    roleIds: access.roleIds,
     userFeatures,
     shares: shares.map((s) => ({
       id: s.id,
@@ -152,8 +139,9 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
         dataset,
         definition,
         userFeatures,
-        tenantId: auth.tenantId,
-        organizationId: auth.orgId ?? '',
+        userId: access.userId,
+        tenantId: access.tenantId,
+        organizationId,
         params,
         parameterDefs,
       },
@@ -161,8 +149,8 @@ export async function GET(req: Request, ctx: { params?: { id?: string } }) {
     )
     report.lastExecutedAt = new Date()
     await em.flush()
-    const filename = defaultExportFilename(report.name || `report_${report.id.slice(0, 8)}`, format)
-    return new NextResponse(artifact.body, {
+    const filename = reportExportFilename(report.name || `report_${report.id.slice(0, 8)}`, format)
+    return new NextResponse(typeof artifact.body === 'string' ? artifact.body : new Uint8Array(artifact.body), {
       status: 200,
       headers: {
         'content-type': artifact.contentType,
@@ -197,7 +185,7 @@ export const openApi = {
     GET: {
       summary: 'Run a report and return the result as a file',
       description:
-        'Resolves parameters, applies field-level ACL against the **running** user, runs the report through the executor (flat_list directly or via the in-memory aggregator), and serializes the rows to the requested format. Supports csv / json / xml / markdown today; XLSX ships in Step 3.6b.',
+        'Resolves parameters, applies field-level ACL against the **running** user, runs the report through the executor (flat_list directly or via the in-memory aggregator), and serializes the rows to the requested format. Supports csv / xlsx / json / xml / markdown. CSV/JSON carry raw typed values plus a currency column for money columns; XLSX writes typed cells.',
       tags: [reportsTag],
       responses: [
         { status: 200, description: 'Serialized report (Content-Disposition: attachment)' },

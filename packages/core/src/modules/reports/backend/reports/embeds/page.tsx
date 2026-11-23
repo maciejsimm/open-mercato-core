@@ -12,7 +12,9 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { useGuardedMutation } from '@open-mercato/ui/backend/injection/useGuardedMutation'
 import { Plus } from 'lucide-react'
+import { findEmbedHostField, getEmbedHostSpot, type EmbedBinding } from '../../../lib/embed-spots'
 
 type EmbedRow = {
   id: string
@@ -20,12 +22,20 @@ type EmbedRow = {
   hostEntityId: string
   artifactType: 'report' | 'dashboard'
   artifactId: string
-  paramBindings: Record<string, unknown>
+  paramBindings: Record<string, EmbedBinding>
   displayTitle: string | null
   position: number
   enabled: boolean
   createdAt: string | null
   updatedAt: string | null
+}
+
+type ArtifactNames = { report: Map<string, string>; dashboard: Map<string, string> }
+
+function formatLiteral(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
 }
 
 type EmbedsResponse = {
@@ -47,6 +57,25 @@ export default function EmbedsListPage() {
   const [pageSize] = React.useState(50)
   const [isLoading, setIsLoading] = React.useState(true)
   const [reloadToken, setReloadToken] = React.useState(0)
+  const [artifactNames, setArtifactNames] = React.useState<ArtifactNames>({ report: new Map(), dashboard: new Map() })
+  const { runMutation } = useGuardedMutation<Record<string, unknown>>({ contextId: 'reports.embeds.list' })
+
+  React.useEffect(() => {
+    let cancelled = false
+    async function loadNames() {
+      const [reportsCall, dashboardsCall] = await Promise.all([
+        apiCall<{ items?: Array<{ id: string; name: string }> }>('/api/reports/reports?pageSize=100', undefined, { fallback: { items: [] } }),
+        apiCall<{ items?: Array<{ id: string; name: string }> }>('/api/reports/dashboards?pageSize=100', undefined, { fallback: { items: [] } }),
+      ])
+      if (cancelled) return
+      setArtifactNames({
+        report: new Map((reportsCall.ok ? reportsCall.result?.items ?? [] : []).map((item) => [item.id, item.name])),
+        dashboard: new Map((dashboardsCall.ok ? dashboardsCall.result?.items ?? [] : []).map((item) => [item.id, item.name])),
+      })
+    }
+    loadNames().catch(() => undefined)
+    return () => { cancelled = true }
+  }, [scopeVersion])
 
   React.useEffect(() => {
     let cancelled = false
@@ -88,10 +117,15 @@ export default function EmbedsListPage() {
   const handleToggleEnabled = React.useCallback(
     async (embed: EmbedRow) => {
       try {
-        await apiCallOrThrow('/api/reports/embeds', {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id: embed.id, enabled: !embed.enabled }),
+        const payload = { id: embed.id, enabled: !embed.enabled }
+        await runMutation({
+          operation: () => apiCallOrThrow('/api/reports/embeds', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          }),
+          context: { formId: 'reports.embeds.list', resourceKind: 'reports.embed', resourceId: embed.id },
+          mutationPayload: payload,
         })
         flash(
           embed.enabled
@@ -105,7 +139,7 @@ export default function EmbedsListPage() {
         flash(message, 'error')
       }
     },
-    [handleRefresh, t],
+    [handleRefresh, runMutation, t],
   )
 
   const handleDelete = React.useCallback(
@@ -116,9 +150,13 @@ export default function EmbedsListPage() {
       })
       if (!confirmed) return
       try {
-        await apiCallOrThrow(`/api/reports/embeds?id=${encodeURIComponent(embed.id)}`, {
-          method: 'DELETE',
-          headers: { 'content-type': 'application/json' },
+        await runMutation({
+          operation: () => apiCallOrThrow(`/api/reports/embeds?id=${encodeURIComponent(embed.id)}`, {
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+          }),
+          context: { formId: 'reports.embeds.list', resourceKind: 'reports.embed', resourceId: embed.id },
+          mutationPayload: { id: embed.id },
         })
         setRows((prev) => prev.filter((row) => row.id !== embed.id))
         setTotal((prev) => Math.max(prev - 1, 0))
@@ -129,7 +167,7 @@ export default function EmbedsListPage() {
         flash(message, 'error')
       }
     },
-    [confirm, handleRefresh, t],
+    [confirm, handleRefresh, runMutation, t],
   )
 
   const columns = React.useMemo<ColumnDef<EmbedRow>[]>(() => {
@@ -145,23 +183,68 @@ export default function EmbedsListPage() {
       },
       {
         accessorKey: 'hostSpotId',
-        header: t('reports.embeds.list.columns.host', 'Host'),
-        cell: ({ row }) => (
-          <div className="flex flex-col">
-            <span className="font-mono text-xs">{row.original.hostSpotId}</span>
-            <span className="font-mono text-xs text-muted-foreground">{row.original.hostEntityId}</span>
-          </div>
-        ),
+        header: t('reports.embeds.list.columns.where', 'Where'),
+        cell: ({ row }) => {
+          const spot = getEmbedHostSpot(row.original.hostSpotId)
+          return spot
+            ? <span>{t(spot.labelKey, spot.label)}</span>
+            : (
+              <span className="text-status-warning-text" title={row.original.hostSpotId}>
+                {t('reports.embeds.list.unknownSpot', 'Unsupported page')}
+              </span>
+            )
+        },
       },
       {
         accessorKey: 'artifactType',
         header: t('reports.embeds.list.columns.artifact', 'Artifact'),
-        cell: ({ row }) => (
-          <div className="flex flex-col">
-            <span className="text-xs uppercase text-muted-foreground">{row.original.artifactType}</span>
-            <span className="font-mono text-xs">{row.original.artifactId.slice(0, 8)}…</span>
-          </div>
-        ),
+        cell: ({ row }) => {
+          const name = artifactNames[row.original.artifactType].get(row.original.artifactId)
+          return (
+            <div className="flex flex-col">
+              <span>{name ?? t('reports.embeds.list.artifactUnavailable', 'Unavailable')}</span>
+              <span className="text-xs text-muted-foreground">
+                {row.original.artifactType === 'dashboard'
+                  ? t('reports.embeds.new.artifactType.dashboard', 'Dashboard')
+                  : t('reports.embeds.new.artifactType.report', 'Report')}
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        id: 'bindings',
+        header: t('reports.embeds.list.columns.bindings', 'Bindings'),
+        cell: ({ row }) => {
+          const spot = getEmbedHostSpot(row.original.hostSpotId)
+          const entries = Object.entries(row.original.paramBindings ?? {})
+          if (entries.length === 0) return <span className="text-muted-foreground">—</span>
+          return (
+            <ul className="space-y-0.5 text-xs">
+              {entries.map(([paramKey, binding]) => {
+                const source = binding.source === 'record-field'
+                  ? (() => {
+                    const field = findEmbedHostField(spot, binding.recordField)
+                    return field ? t(field.labelKey, field.label) : binding.recordField
+                  })()
+                  : `"${formatLiteral(binding.value)}"`
+                return (
+                  <li key={paramKey}>
+                    <span className="font-mono">{paramKey}</span>
+                    <span className="text-muted-foreground"> ← </span>
+                    <span>{source}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )
+        },
+        meta: { truncate: false },
+      },
+      {
+        accessorKey: 'position',
+        header: t('reports.embeds.list.columns.position', 'Position'),
+        cell: ({ row }) => <span className="tabular-nums">{row.original.position}</span>,
       },
       {
         accessorKey: 'enabled',
@@ -173,7 +256,7 @@ export default function EmbedsListPage() {
         ),
       },
     ]
-  }, [t])
+  }, [artifactNames, t])
 
   const newEmbedButton = (
     <Button asChild>
@@ -222,6 +305,11 @@ export default function EmbedsListPage() {
           rowActions={(row) => (
             <RowActions
               items={[
+                {
+                  id: 'edit',
+                  label: t('reports.embeds.list.actions.edit', 'Edit'),
+                  href: `/backend/reports/embeds/new?id=${encodeURIComponent(row.id)}`,
+                },
                 {
                   id: 'toggle',
                   label: row.enabled

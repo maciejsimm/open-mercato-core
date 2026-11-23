@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
+import { resolveReportsRequestAccess } from '../../lib/access'
 import type { Dataset } from '@open-mercato/shared/modules/reports/dsl'
 import { listVisibleDatasets } from '../../lib/datasets-registry'
 
@@ -32,15 +30,12 @@ function summarize(dataset: Dataset): DatasetSummary {
 }
 
 export async function GET(req: Request) {
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json({ error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } }, { status: 401 })
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
-  const container = await createRequestContainer()
-  const rbac = container.resolve('rbacService') as RbacService
-  const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId, organizationId: auth.orgId ?? null })
-  const userFeatures = new Set<string>(acl.isSuperAdmin ? ['*'] : acl.features)
+  const userFeatures = access.userFeatures
 
   const datasets = await listVisibleDatasets(userFeatures)
   return NextResponse.json({ items: datasets.map(summarize), total: datasets.length })

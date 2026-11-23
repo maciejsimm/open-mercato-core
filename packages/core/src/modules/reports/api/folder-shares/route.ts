@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
+import { buildFolderAclContext, resolveReportsRequestAccess } from '../../lib/access'
+import { canShareFolder } from '../../lib/folder-acl'
+import { loadFolderRecord, loadFolderShares } from '../../commands/shared'
 import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { ReportFolderShare } from '../../data/entities'
 import { reportsTag, reportsErrorSchema } from '../openapi'
@@ -52,10 +53,10 @@ const crud = makeCrudRoute<CrudInput, CrudInput, Record<string, unknown>>({
 })
 
 export async function GET(req: Request) {
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json({ items: [], total: 0, page: 1, pageSize: 50, totalPages: 1 }, { status: 401 })
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   const url = new URL(req.url)
   const parsed = listQuerySchema.safeParse({
@@ -70,15 +71,22 @@ export async function GET(req: Request) {
     )
   }
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
+
+  const folder = await loadFolderRecord(em, parsed.data.folderId, access.tenantId, organizationId)
+  const folderShares = folder ? await loadFolderShares(em, folder.id) : []
+  if (!folder || !canShareFolder(folder, buildFolderAclContext(access, folderShares))) {
+    return NextResponse.json(
+      { error: { code: 'REPORT_FOLDER_FORBIDDEN', message: 'You cannot manage sharing for this folder' } },
+      { status: 403 },
+    )
+  }
 
   const shares = await em.find(
     ReportFolderShare,
     {
       folderId: parsed.data.folderId,
-      tenantId: auth.tenantId,
-      organizationId: auth.orgId ?? undefined,
+      tenantId: access.tenantId,
+      organizationId,
     } as Record<string, unknown>,
     { orderBy: { createdAt: 'ASC' } },
   )

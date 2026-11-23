@@ -1,3 +1,4 @@
+import { hasAnyReportFeature } from './feature-access'
 import type { Dataset } from '@open-mercato/shared/modules/reports/dsl'
 
 export type DatasetSource = {
@@ -57,14 +58,5 @@ export async function loadDataset(
 export function isDatasetVisible(dataset: Dataset, userFeatures: ReadonlySet<string>): boolean {
   const required = dataset.requiredFeatures
   if (!required?.length) return true
-  return required.some((feat) => userFeatures.has(feat) || hasWildcard(feat, userFeatures))
-}
-
-function hasWildcard(required: string, userFeatures: ReadonlySet<string>): boolean {
-  if (userFeatures.has(required)) return true
-  const parts = required.split('.')
-  for (let i = parts.length - 1; i > 0; i--) {
-    if (userFeatures.has(parts.slice(0, i).join('.') + '.*')) return true
-  }
-  return userFeatures.has('*')
+  return hasAnyReportFeature(userFeatures, required)
 }

@@ -1,17 +1,30 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ParameterDef, ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
-import { Report, ReportSchedule } from '../data/entities'
+import { sendEmail } from '@open-mercato/shared/lib/email/send'
+import { loadDictionary } from '@open-mercato/shared/lib/i18n/server'
+import { createFallbackTranslator } from '@open-mercato/shared/lib/i18n/translate'
+import { defaultLocale } from '@open-mercato/shared/lib/i18n/config'
+import { createLogger } from '@open-mercato/shared/lib/logger'
+import { ReportExecution, ReportSchedule } from '../data/entities'
+import { ScheduledReportEmail } from '../emails/ScheduledReportEmail'
+import { emitReportsEvent } from '../events'
+import { resolveAccessForUser } from '../lib/access'
+import { hashParams } from '../lib/async-run'
 import { loadDataset } from '../lib/datasets-registry'
-import { executeReport } from '../lib/execute'
+import { buildEmailAttachments } from '../lib/email-attachments'
+import { executeReport, type ExecutionResult } from '../lib/execute'
+import { isReportExportFormat, serializeReportResult, type ReportExportFormat } from '../lib/export'
 import { FieldAclDeniedError } from '../lib/field-redact'
+import { isReportsAdmin } from '../lib/folder-acl'
+import { findColumn, formatReportValue } from '../lib/format'
+import { notifyReportsUser } from '../lib/notify'
+import { resolveRecipientEmails } from '../lib/recipients'
+import { canRunReport, loadScopedReport } from '../lib/report-access'
 import { parseCadence, computeNextRunAt } from '../lib/schedule-cadence'
-import {
-  REPORTS_SCHEDULE_EXECUTE_QUEUE,
-  getExportBuildQueue,
-  type ExportBuildJob,
-  type ScheduleExecuteJob,
-} from '../lib/queues'
+import { REPORTS_SCHEDULE_EXECUTE_QUEUE, type ScheduleExecuteJob } from '../lib/queues'
+
+const logger = createLogger('reports').child({ component: 'workers/schedule-execute' })
 
 export const metadata = {
   queue: REPORTS_SCHEDULE_EXECUTE_QUEUE,
@@ -23,25 +36,72 @@ type HandlerContext = {
   resolve: <T = unknown>(name: string) => T
 }
 
-const MAX_FAILURES = 3
+export const MAX_SCHEDULE_FAILURES = 3
+const PREVIEW_ROWS = 10
+
+/** Base retry delay; doubles per consecutive failure (15 min, 30 min, …). */
+export const SCHEDULE_RETRY_BASE_MS = 15 * 60 * 1000
 
 /**
- * Run one schedule. The worker is idempotent on `scheduleId + nextRunAt`:
- * before doing any work it locks the schedule row by checking that the
- * stored `nextRunAt` still matches the job payload's `runAt`. If the
- * runner has already advanced the schedule (another worker won the race),
- * the job exits without side-effects.
+ * Exponential backoff for a failed run, never later than the next regular
+ * occurrence (a regular run is itself the retry).
+ */
+export function computeRetryAt(now: Date, failureCount: number, nextRegularRun: Date | null): Date {
+  const delay = SCHEDULE_RETRY_BASE_MS * 2 ** Math.max(0, failureCount - 1)
+  const retry = new Date(now.getTime() + delay)
+  if (nextRegularRun && nextRegularRun.getTime() < retry.getTime()) return nextRegularRun
+  return retry
+}
+
+export class ScheduleRunError extends Error {
+  constructor(readonly code: string) {
+    super(code)
+  }
+}
+
+function appBaseUrl(): string | null {
+  const raw = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
+  return raw ? raw.replace(/\/+$/, '') : null
+}
+
+function buildPreviewTable(
+  result: ExecutionResult,
+  locale: string,
+  timeZone: string,
+  translate: (key: string, fallback: string) => string,
+): { headers: string[]; rows: string[][] } {
+  const keys = result.meta.fields ?? (result.rows[0] ? Object.keys(result.rows[0]) : [])
+  return {
+    headers: keys,
+    rows: result.rows.slice(0, PREVIEW_ROWS).map((row) =>
+      keys.map((key) =>
+        formatReportValue(row[key], findColumn(result.meta.columns, key), { locale, timeZone, translate, row }),
+      ),
+    ),
+  }
+}
+
+/**
+ * Run one due schedule and email the result.
  *
- * Email + attachment delivery lives in Step 4.3 (`lib/email-attachments.ts`
- * + `ScheduledReportEmail` template); this worker enqueues an
- * `reports-export-build` job per configured format and lets that worker
- * own the artifact lifecycle.
+ * Execution identity (spec Q9 default a): the schedule runs as its
+ * **owner** with live ACL — folder access, dataset visibility and field
+ * ACL are re-resolved on every run. If the owner lost access the run
+ * fails closed (failure count + owner notification after
+ * `MAX_SCHEDULE_FAILURES`). External email recipients are delivered only
+ * while the owner holds `reports.admin`.
+ *
+ * Exactly-once per occurrence: the worker claims the run by atomically
+ * advancing `next_run_at` from the value it read; a concurrent or
+ * re-enqueued job loses the claim and exits. Failures retry with
+ * exponential backoff (`computeRetryAt`).
  */
 export default async function handle(
   job: { payload: ScheduleExecuteJob },
   ctx: HandlerContext,
 ): Promise<void> {
   const { scheduleId, tenantId, organizationId } = job.payload
+  const scope = { tenantId, organizationId }
   const em = (ctx.resolve('em') as EntityManager).fork()
   const schedule = await em.findOne(ReportSchedule, {
     id: scheduleId,
@@ -51,90 +111,176 @@ export default async function handle(
   } as Record<string, unknown>)
   if (!schedule || !schedule.enabled) return
 
-  // Race guard: if another worker already advanced this schedule, skip.
   if (job.payload.runAt && schedule.nextRunAt) {
     const jobRunAt = new Date(job.payload.runAt).getTime()
     if (schedule.nextRunAt.getTime() > jobRunAt) return
   }
 
-  const report = await em.findOne(Report, {
-    id: schedule.reportId,
-    tenantId,
-    organizationId,
-    deletedAt: null,
-  } as Record<string, unknown>)
-  if (!report) {
-    schedule.failureCount = (schedule.failureCount ?? 0) + 1
-    schedule.lastRunAt = new Date()
-    await em.flush()
-    return
-  }
-
-  // The schedule executes as a system principal for the report owner — we
-  // pass `userFeatures: ['*']` so the executor does not redact fields the
-  // schedule owner intentionally included. (Phase 5 will look up the owner
-  // and use their actual feature set.)
-  const userFeatures = new Set<string>(['*'])
-  const dataset = await loadDataset(report.datasetId, userFeatures)
-  if (!dataset) {
-    schedule.failureCount = (schedule.failureCount ?? 0) + 1
-    schedule.lastRunAt = new Date()
-    await em.flush()
-    return
-  }
-
-  const queryEngine = ctx.resolve('queryEngine') as QueryEngine
-  const definition = report.definitionJson as ReportDefinition
-  const parameterDefs = (report.parametersJson as ParameterDef[] | undefined) ?? undefined
+  // Atomic claim: advance next_run_at only if it still holds the value we
+  // read. A concurrent worker (or a re-enqueue from the next runner tick)
+  // loses the race and exits, so a slow run is never delivered twice.
+  const now = new Date()
+  const claimedFrom = schedule.nextRunAt ?? null
+  const parsedCadence = parseCadence(schedule.cadence)
+  const nextRegularRun = parsedCadence ? computeNextRunAt(parsedCadence, now, schedule.timezone) : null
+  const claimed = await em.nativeUpdate(
+    ReportSchedule,
+    { id: schedule.id, tenantId, organizationId, nextRunAt: claimedFrom } as Record<string, unknown>,
+    { nextRunAt: nextRegularRun } as Record<string, unknown>,
+  )
+  if (claimed === 0) return
+  schedule.nextRunAt = nextRegularRun
+  const report = await loadScopedReport(em, schedule.reportId, scope)
+  const ownerUserId = schedule.ownerUserId ?? report?.ownerUserId ?? null
   const params = (schedule.paramsJson as Record<string, unknown> | undefined) ?? {}
+  const execution = em.create(ReportExecution, {
+    organizationId,
+    tenantId,
+    reportId: schedule.reportId,
+    scheduleId: schedule.id,
+    requestedByUserId: ownerUserId,
+    paramsHash: hashParams(params),
+    status: 'running',
+    startedAt: now,
+    createdAt: now,
+  })
+  em.persist(execution)
+  await em.flush()
 
+  const started = Date.now()
   try {
-    await executeReport(queryEngine, {
+    if (!report) throw new ScheduleRunError('report_not_found')
+    if (!ownerUserId) throw new ScheduleRunError('schedule_owner_missing')
+    const access = await resolveAccessForUser(ctx, em, ownerUserId, scope)
+    if (!(await canRunReport(em, report, access))) throw new ScheduleRunError('report_access_denied')
+    const dataset = await loadDataset(report.datasetId, access.userFeatures)
+    if (!dataset) throw new ScheduleRunError('dataset_not_visible')
+
+    const definition = report.definitionJson as ReportDefinition
+    const result = await executeReport(ctx.resolve('queryEngine') as QueryEngine, {
       dataset,
       definition,
-      userFeatures,
+      userFeatures: access.userFeatures,
+      userId: access.userId,
       tenantId,
       organizationId,
       params,
-      parameterDefs,
+      parameterDefs: (report.parametersJson as ParameterDef[] | undefined) ?? undefined,
+      now,
+      readAllPages: true,
     })
+
+    const formats = ((schedule.formatsJson as unknown[] | undefined) ?? ['csv']).filter(isReportExportFormat) as ReportExportFormat[]
+    const artifacts = (formats.length ? formats : (['csv'] as ReportExportFormat[])).map((format) =>
+      serializeReportResult(definition, result, format, { sheetName: report.name }),
+    )
+    const { attachments, omitted } = buildEmailAttachments(report.name, artifacts)
+    const { emails, droppedExternal } = await resolveRecipientEmails(em, schedule.recipientsJson, scope, {
+      allowExternal: isReportsAdmin(access.userFeatures),
+    })
+
+    const dict = await loadDictionary(defaultLocale)
+    const translate = createFallbackTranslator(dict)
+    const timeZone = schedule.timezone || 'UTC'
+    const baseUrl = appBaseUrl()
+    const reportUrl = baseUrl ? `${baseUrl}/backend/reports/${report.id}` : undefined
+    const vars = { reportName: report.name, scheduleName: schedule.name, rows: String(result.total) }
+    const interpolate = (text: string) => text.replace(/\{(\w+)\}/g, (_m, key: string) => vars[key as keyof typeof vars] ?? '')
+    const subject = interpolate(translate('reports.email.scheduled.subject', '{scheduleName}: {reportName}'))
+    const copy = {
+      preview: interpolate(translate('reports.email.scheduled.preview', '{reportName} — scheduled delivery')),
+      title: interpolate(translate('reports.email.scheduled.title', '{reportName}')),
+      summary: interpolate(translate('reports.email.scheduled.summary', 'Your scheduled report "{scheduleName}" returned {rows} rows.')),
+      attachmentsNote: omitted.length
+        ? translate('reports.email.scheduled.attachmentsOmitted', 'Some files were too large to attach — open the report in the app to download them.')
+        : translate('reports.email.scheduled.attachmentsNote', 'The full result is attached.'),
+      cta: translate('reports.email.scheduled.cta', 'Open report'),
+      footer: translate('reports.email.scheduled.footer', 'You receive this email because you are a recipient of a scheduled report.'),
+    }
+    const previewTable = buildPreviewTable(result, defaultLocale, timeZone, translate)
+
+    let delivered = 0
+    for (const to of emails) {
+      try {
+        await sendEmail({
+          to,
+          subject,
+          react: ScheduledReportEmail({ copy, previewTable, reportUrl }),
+          attachments,
+          tenantId,
+          organizationId,
+        })
+        delivered += 1
+      } catch (err) {
+        logger.warn('Scheduled report email failed for one recipient', { scheduleId, err })
+      }
+    }
+    if (emails.length > 0 && delivered === 0) throw new ScheduleRunError('email_delivery_failed')
+
+    execution.status = 'completed'
+    execution.completedAt = new Date()
+    execution.rowCount = result.rows.length
+    execution.durationMs = Date.now() - started
     schedule.failureCount = 0
     schedule.lastRunAt = new Date()
-    const parsedCadence = parseCadence(schedule.cadence)
-    schedule.nextRunAt = parsedCadence ? computeNextRunAt(parsedCadence, new Date(), schedule.timezone) : null
     await em.flush()
 
-    // Step 4.3 wires the email side; for now we enqueue export-build jobs
-    // so attachments are at least built and stored for download from the
-    // attachments module.
-    const formats = (schedule.formatsJson as Array<string> | undefined) ?? ['csv']
-    const exportQueue = getExportBuildQueue()
-    for (const format of formats) {
-      if (format !== 'csv' && format !== 'xlsx' && format !== 'json' && format !== 'xml' && format !== 'markdown') continue
-      const exportJob: ExportBuildJob = {
-        reportId: schedule.reportId,
-        tenantId,
-        organizationId,
-        format,
-        scheduleId: schedule.id,
-        params,
-      }
-      await exportQueue.enqueue(exportJob)
-    }
+    await emitReportsEvent('reports.schedule.delivered', {
+      id: schedule.id,
+      scheduleId: schedule.id,
+      reportId: report.id,
+      executionId: execution.id,
+      recipients: delivered,
+      droppedExternalRecipients: droppedExternal,
+      tenantId,
+      organizationId,
+    }, { persistent: true }).catch((err: unknown) => logger.warn('Failed to emit schedule delivered event', { err }))
+    await notifyReportsUser(
+      ctx,
+      'reports.schedule_delivered',
+      {
+        recipientUserId: ownerUserId,
+        bodyVariables: { scheduleName: schedule.name, reportName: report.name },
+        sourceEntityType: 'reports:schedule',
+        sourceEntityId: schedule.id,
+        groupKey: `reports:schedule-delivered:${schedule.id}`,
+      },
+      scope,
+    )
   } catch (err) {
-    if (err instanceof FieldAclDeniedError) {
-      schedule.failureCount = (schedule.failureCount ?? 0) + 1
-      schedule.lastRunAt = new Date()
-      await em.flush()
-      return
-    }
+    const code =
+      err instanceof ScheduleRunError ? err.code : err instanceof FieldAclDeniedError ? 'field_acl_denied' : 'execution_failed'
+    execution.status = 'failed'
+    execution.completedAt = new Date()
+    execution.durationMs = Date.now() - started
+    execution.errorText = code
     schedule.failureCount = (schedule.failureCount ?? 0) + 1
     schedule.lastRunAt = new Date()
-    if (schedule.failureCount >= MAX_FAILURES) {
+    const exhausted = schedule.failureCount >= MAX_SCHEDULE_FAILURES
+    if (exhausted) {
       schedule.enabled = false
       schedule.nextRunAt = null
+    } else {
+      schedule.nextRunAt = computeRetryAt(new Date(), schedule.failureCount, nextRegularRun)
     }
     await em.flush()
-    throw err
+    if (exhausted && ownerUserId) {
+      await notifyReportsUser(
+        ctx,
+        'reports.schedule_failed',
+        {
+          recipientUserId: ownerUserId,
+          bodyVariables: { scheduleName: schedule.name, reason: code },
+          sourceEntityType: 'reports:schedule',
+          sourceEntityId: schedule.id,
+          groupKey: `reports:schedule-failed:${schedule.id}`,
+        },
+        scope,
+      )
+    }
+    // No rethrow: the retry is scheduled through next_run_at with
+    // exponential backoff; `failureCount` bounds retries without the queue
+    // duplicating execution rows.
+    logger.warn('Scheduled report run failed', { scheduleId, code, failureCount: schedule.failureCount, err })
   }
 }

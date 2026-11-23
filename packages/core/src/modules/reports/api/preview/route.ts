@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
+import { resolveReportsRequestAccess } from '../../lib/access'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type { ReportDefinition, ParameterDef } from '@open-mercato/shared/modules/reports/dsl'
 import { reportPreviewSchema } from '../../data/validators'
@@ -33,13 +31,10 @@ const MAX_PREVIEW_LIMIT = 100
  * Field-level ACL still runs against the calling user, identical to /run.
  */
 export async function POST(req: Request) {
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json(
-      { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } },
-      { status: 401 },
-    )
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   let body: unknown = {}
   try {
@@ -61,13 +56,7 @@ export async function POST(req: Request) {
     )
   }
 
-  const container = await createRequestContainer()
-  const rbac = container.resolve('rbacService') as RbacService
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   const dataset = await loadDataset(parsed.data.datasetId, userFeatures)
   if (!dataset) {
@@ -91,11 +80,14 @@ export async function POST(req: Request) {
       dataset,
       definition,
       userFeatures,
-      tenantId: auth.tenantId,
-      organizationId: auth.orgId ?? '',
+      userId: access.userId,
+      tenantId: access.tenantId,
+      organizationId,
       params: parsed.data.params ?? {},
       parameterDefs: parsed.data.parameters as ParameterDef[] | undefined,
-      inMemoryCap: Math.max(limit, 100),
+      // Aggregates must scan the full result set (up to the env cap); only
+      // the returned row count is trimmed to the preview limit.
+      inMemoryCap: definition.type === 'flat_list' ? Math.max(limit, 100) : undefined,
     })
     const rows = Array.isArray(out.rows) ? out.rows.slice(0, limit) : []
     return NextResponse.json({

@@ -17,8 +17,8 @@ import {
   type FolderShareDeleteInput,
   type FolderUpdateInput,
 } from '../data/validators'
-import { canEditFolder, canShareFolder, canViewFolder } from '../lib/folder-acl'
-import { loadAclContext, loadFolderRecord, requireTenant } from './shared'
+import { canEditFolder, canShareFolder, canViewFolder, isReportsAdmin } from '../lib/folder-acl'
+import { loadAclContext, loadCommandAccess, loadFolderRecord, requireTenant } from './shared'
 
 const folderIndexer: CrudIndexerConfig<ReportFolder> = {
   entityType: 'reports:folder',
@@ -57,10 +57,8 @@ const createFolderCommand: CommandHandler<FolderCreateInput, { folderId: string 
       // private folder always owned by the creator
     } else {
       // creating public top-level folders requires reports.admin
-      const features = new Set<string>((ctx.auth as { features?: string[] } | null)?.features ?? [])
-      const isAdmin =
-        features.has('reports.admin') || features.has('reports.*') || features.has('*')
-      if (!isAdmin) {
+      const access = await loadCommandAccess(ctx, (ctx.container.resolve('em') as EntityManager).fork(), tenantId, organizationId)
+      if (!isReportsAdmin(access.userFeatures)) {
         throw new CrudHttpError(403, { error: 'Only reports.admin can create public folders' })
       }
     }

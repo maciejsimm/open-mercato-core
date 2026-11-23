@@ -27,6 +27,10 @@ export type ScheduleExecuteJob = {
 }
 
 export type AsyncExecuteJob = {
+  /** `reports_executions` row created by the dispatching request. */
+  executionId?: string
+  /** User the run executes as (live ACL re-resolved in the worker). */
+  requestedByUserId?: string
   reportId: string
   tenantId: string
   organizationId: string
@@ -45,6 +49,8 @@ export type ExportBuildJob = {
   scheduleId?: string
   /** Pre-resolved parameter values. */
   params?: Record<string, unknown>
+  /** User the export executes as (live ACL re-resolved in the worker). */
+  requestedByUserId?: string
 }
 
 const queues = new Map<string, Queue<Record<string, unknown>>>()

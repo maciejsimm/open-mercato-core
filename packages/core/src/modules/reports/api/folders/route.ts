@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
+import { resolveReportsRequestAccess } from '../../lib/access'
 import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
-import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import { ReportFolder, ReportFolderShare } from '../../data/entities'
-import { canViewFolder, resolveFolderPermission, type FolderAclContext } from '../../lib/folder-acl'
+import { canShareFolder, canViewFolder, resolveFolderPermission, type FolderAclContext } from '../../lib/folder-acl'
+import { hasReportFeature } from '../../lib/feature-access'
 import { reportsTag, reportsErrorSchema } from '../openapi'
 
 const listQuerySchema = z
@@ -93,10 +92,10 @@ async function ensureMyReportsRoot(opts: {
 }
 
 export async function GET(req: Request) {
-  const auth = await getAuthFromRequest(req)
-  if (!auth?.tenantId) {
-    return NextResponse.json({ items: [], total: 0, page: 1, pageSize: 50, totalPages: 1 }, { status: 401 })
-  }
+  const resolved = await resolveReportsRequestAccess(req)
+  if (!resolved.ok) return resolved.response
+  const { auth, access, container, em } = resolved
+  const organizationId = access.organizationId
 
   const url = new URL(req.url)
   const parsed = listQuerySchema.safeParse({
@@ -109,28 +108,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ items: [], total: 0, page: 1, pageSize: 50, totalPages: 1 }, { status: 400 })
   }
 
-  const container = await createRequestContainer()
-  const em = container.resolve('em') as EntityManager
-  const rbac = container.resolve('rbacService') as RbacService
 
-  const aclData = await rbac.loadAcl(auth.sub, {
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
-  })
-  const userFeatures = new Set<string>(aclData.isSuperAdmin ? ['*'] : aclData.features)
+  const userFeatures = access.userFeatures
 
   await ensureMyReportsRoot({
     em,
-    userId: auth.sub,
-    tenantId: auth.tenantId,
-    organizationId: auth.orgId ?? null,
+    userId: access.userId,
+    tenantId: access.tenantId,
+    organizationId,
   })
 
   const folders = await em.find(
     ReportFolder,
     {
-      tenantId: auth.tenantId,
-      organizationId: auth.orgId ?? undefined,
+      tenantId: access.tenantId,
+      organizationId,
       deletedAt: null,
       ...(parsed.data.kind ? { kind: parsed.data.kind } : {}),
       ...(parsed.data.parentFolderId ? { parentFolderId: parsed.data.parentFolderId } : {}),
@@ -143,8 +135,8 @@ export async function GET(req: Request) {
     ? await em.find(ReportFolderShare, { folderId: { $in: folderIds } } as Record<string, unknown>)
     : []
   const ctx: FolderAclContext = {
-    userId: auth.sub,
-    roleIds: new Set<string>(Array.isArray(auth.roles) ? auth.roles : []),
+    userId: access.userId,
+    roleIds: access.roleIds,
     userFeatures,
     shares: shares.map((s) => ({
       id: s.id,
@@ -172,10 +164,11 @@ export async function GET(req: Request) {
         parentFolderId: f.parentFolderId ?? null,
         kind: f.kind,
         ownerUserId: f.ownerUserId ?? null,
-        ownedByViewer: f.kind === 'private' && f.ownerUserId === auth.sub,
+        ownedByViewer: f.kind === 'private' && f.ownerUserId === access.userId,
         name: f.name,
         position: f.position,
         permission: perm,
+        canShare: hasReportFeature(userFeatures, 'reports.share') && canShareFolder(rec, ctx),
         createdAt: f.createdAt?.toISOString() ?? null,
         updatedAt: f.updatedAt?.toISOString() ?? null,
       }

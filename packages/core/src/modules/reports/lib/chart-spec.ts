@@ -9,6 +9,80 @@ export type ChartSpec = {
   yFields: string[]
   stacked?: boolean
   showLegend?: boolean
+  /** Optional named DS chart colors (`blue`, `emerald`, …) overriding the default palette. */
+  palette?: string[]
+}
+
+/**
+ * Default series palette: named DS chart tokens resolved by `resolveChartColor`
+ * from `@open-mercato/ui/backend/charts/ChartUtils`. Ordered for contrast between
+ * neighbouring series rather than following the theme's `--chart-1..5` ramp.
+ */
+export const REPORT_CHART_PALETTE: readonly string[] = [
+  'blue',
+  'emerald',
+  'violet',
+  'amber',
+  'rose',
+  'cyan',
+  'indigo',
+  'pink',
+  'teal',
+  'orange',
+]
+
+/** Palette for a spec: the persisted `palette` when set, the default otherwise. */
+export function chartPaletteFor(spec: Pick<ChartSpec, 'palette'>): readonly string[] {
+  const custom = (spec.palette ?? []).filter((name) => typeof name === 'string' && name.length > 0)
+  return custom.length > 0 ? custom : REPORT_CHART_PALETTE
+}
+
+/** Color name for the `index`-th series (wraps around the palette). */
+export function chartColorName(palette: readonly string[], index: number): string {
+  const source = palette.length > 0 ? palette : REPORT_CHART_PALETTE
+  return source[((index % source.length) + source.length) % source.length]
+}
+
+export type DataLabelsMode = 'auto' | boolean
+
+/** Above this many points, automatic data labels would overlap. */
+export const AUTO_DATA_LABEL_MAX_POINTS = 12
+
+/**
+ * Whether value labels are drawn on the marks. `auto` labels a single,
+ * unstacked bar series with few enough points to stay legible.
+ */
+export function shouldShowDataLabels(
+  mode: DataLabelsMode | undefined,
+  input: { kind: ChartRenderPlan['kind']; pointCount: number; seriesCount: number; stacked?: boolean },
+): boolean {
+  if (mode === true) return input.pointCount > 0
+  if (mode === false) return false
+  return (
+    input.kind === 'bar' &&
+    input.seriesCount === 1 &&
+    !input.stacked &&
+    input.pointCount > 0 &&
+    input.pointCount <= AUTO_DATA_LABEL_MAX_POINTS
+  )
+}
+
+/** True when the plan has nothing numeric to plot. */
+export function isChartPlanEmpty(plan: ChartRenderPlan): boolean {
+  if (plan.kind === 'pie' || plan.kind === 'donut') return plan.data.length === 0
+  if (plan.kind === 'scatter') return plan.series.every((s) => s.data.length === 0)
+  let keys: string[] = []
+  if (plan.kind === 'combo') keys = plan.series.map((s) => s.key)
+  else if (plan.kind === 'bar' || plan.kind === 'line' || plan.kind === 'area') keys = plan.categories
+  if (plan.data.length === 0 || keys.length === 0) return true
+  return !plan.data.some((row) => keys.some((key) => coerceNumber(row[key]) !== undefined))
+}
+
+/** Shorten a long category label for an axis tick; the tooltip keeps the full value. */
+export function truncateAxisLabel(label: unknown, max = 18): string {
+  const text = label === null || label === undefined ? '' : String(label)
+  if (text.length <= max) return text
+  return `${text.slice(0, Math.max(1, max - 1))}…`
 }
 
 /**
@@ -199,4 +273,141 @@ function inferNumericKeys(rows: readonly Row[], excludeKey: string): string[] {
  */
 export function aliasesFor(measures: readonly MeasureExpr[]): string[] {
   return measures.map((m) => measureAlias(m))
+}
+
+/** Chart kinds that plot exactly one Y series. */
+export function isSingleSeriesChart(type: ChartType): boolean {
+  return type === 'pie' || type === 'donut' || type === 'scatter'
+}
+
+/**
+ * Keep `yFields` in step with the measure list: a new measure's alias is
+ * added, a removed measure's alias is removed, and a renamed alias (same
+ * position, new alias) is renamed in place. Single-series kinds keep at most
+ * one Y field; when measures exist but nothing is plotted, the first alias is
+ * selected so the chart stays valid for the server validator.
+ */
+export function syncChartYFields(
+  spec: Pick<ChartSpec, 'type' | 'yFields'>,
+  prevMeasures: readonly MeasureExpr[],
+  nextMeasures: readonly MeasureExpr[],
+): string[] {
+  const prevAliases = aliasesFor(prevMeasures)
+  const nextAliases = aliasesFor(nextMeasures)
+  const nextSet = new Set(nextAliases)
+  const renames = new Map<string, string>()
+  if (prevAliases.length === nextAliases.length) {
+    prevAliases.forEach((alias, idx) => {
+      if (alias !== nextAliases[idx]) renames.set(alias, nextAliases[idx])
+    })
+  }
+  const kept: string[] = []
+  for (const y of spec.yFields) {
+    const mapped = renames.get(y) ?? y
+    if (nextSet.has(mapped) && !kept.includes(mapped)) kept.push(mapped)
+  }
+  const prevSet = new Set(prevAliases)
+  for (const alias of nextAliases) {
+    if (prevSet.has(alias) || renames.size > 0) continue
+    if (!kept.includes(alias)) kept.push(alias)
+  }
+  return limitChartYFields(spec.type, kept, nextAliases)
+}
+
+/** Apply the single-series limit and the "at least one series" default. */
+export function limitChartYFields(type: ChartType, yFields: readonly string[], aliases: readonly string[]): string[] {
+  const available = new Set(aliases)
+  const valid = yFields.filter((y) => available.has(y))
+  if (isSingleSeriesChart(type) && valid.length > 1) return valid.slice(0, 1)
+  if (valid.length === 0 && aliases.length > 0) return [aliases[0]]
+  return valid
+}
+
+/**
+ * Client mirror of `effectiveChartGroupBy`: with an explicit `groupBy`, the X
+ * field must be one of its keys (the server validator rejects anything else),
+ * so a stale X field falls back to the first group key.
+ */
+export function resolveChartXField(xField: string, groupBy: readonly string[]): string {
+  if (groupBy.length === 0) return xField
+  return groupBy.includes(xField) ? xField : groupBy[0]
+}
+
+export type ChartFormatOptions = {
+  /** Format one value of the column `key`; `row` is the source row when available. */
+  formatValue?: (value: unknown, key: string, row?: Row) => string
+  /** Human label of a Y series (measure alias). */
+  seriesLabel?: (key: string) => string
+}
+
+function uniqueLabels(keys: readonly string[], seriesLabel: (key: string) => string): Map<string, string> {
+  const out = new Map<string, string>()
+  const used = new Set<string>()
+  for (const key of keys) {
+    let label = seriesLabel(key) || key
+    if (used.has(label)) label = `${label} (${key})`
+    used.add(label)
+    out.set(key, label)
+  }
+  return out
+}
+
+/**
+ * Turn a raw render plan into a display plan: category (X) values are run
+ * through `formatValue`, and series keys are renamed to their human labels so
+ * the legend and tooltips show labels instead of aliases. Numeric scatter axes
+ * stay numeric.
+ */
+export function formatChartRenderPlan(
+  plan: ChartRenderPlan,
+  rows: readonly Row[],
+  spec: ChartSpec,
+  options: ChartFormatOptions,
+): ChartRenderPlan {
+  const formatValue = options.formatValue
+  const seriesLabel = options.seriesLabel ?? ((key: string) => key)
+  if (plan.kind === 'pie' || plan.kind === 'donut') {
+    if (!formatValue) return plan
+    const valueKey = spec.yFields[0]
+    const data: Array<{ name: string; value: number }> = []
+    for (const row of rows) {
+      const raw = readFieldValue(row, valueKey ?? '')
+      const num = coerceNumber(raw)
+      if (num === undefined) continue
+      data.push({ name: formatValue(readFieldValue(row, spec.xField), spec.xField, row), value: num })
+    }
+    return valueKey ? { ...plan, data } : plan
+  }
+  if (plan.kind === 'scatter') {
+    return { ...plan, series: plan.series.map((s) => ({ ...s, name: s.name === plan.yField ? seriesLabel(s.name) || s.name : s.name })) }
+  }
+  if (plan.kind === 'combo') {
+    const data = plan.data.map((row, idx) => ({
+      ...row,
+      [plan.index]: formatValue ? formatValue(row[plan.index], plan.index, rows[idx]) : row[plan.index],
+    }))
+    const labels = uniqueLabels(plan.series.map((s) => s.key), seriesLabel)
+    return { ...plan, data, series: plan.series.map((s) => ({ ...s, label: labels.get(s.key) ?? s.label })) }
+  }
+  if (plan.kind === 'bar' || plan.kind === 'line' || plan.kind === 'area') {
+    return formatWidePlan(plan, rows, formatValue, seriesLabel)
+  }
+  return plan
+}
+
+function formatWidePlan(
+  plan: Extract<ChartRenderPlan, { kind: 'bar' | 'line' | 'area' }>,
+  rows: readonly Row[],
+  formatValue: ChartFormatOptions['formatValue'],
+  seriesLabel: (key: string) => string,
+): ChartRenderPlan {
+  const labels = uniqueLabels(plan.categories, seriesLabel)
+  const data = plan.data.map((row, idx) => {
+    const projected: Row = {
+      [plan.index]: formatValue ? formatValue(row[plan.index], plan.index, rows[idx]) : row[plan.index],
+    }
+    for (const key of plan.categories) projected[labels.get(key) ?? key] = row[key]
+    return projected
+  })
+  return { ...plan, data, categories: plan.categories.map((key) => labels.get(key) ?? key) }
 }

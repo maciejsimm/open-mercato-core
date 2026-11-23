@@ -9,10 +9,9 @@ import RecordEmbedHostWidget from './widget.client'
  * record (record-field source) plus any literal overrides, then runs
  * the underlying report or dashboard and renders the rows inline.
  *
- * Registered against the new `detail:customers.person:after-header`
- * and `detail:customers.company:after-header` slots from Step 3.10.
- * Other modules can wire the widget into their own `detail:*:after-header`
- * slots by adding an entry to their `widgets/injection-table.ts`.
+ * Registered against every spot in `lib/embed-spots.ts` (customers person,
+ * company and deal, sales order and quote, catalog product) through the
+ * reports `widgets/injection-table.ts`; add a new host spot to both.
  */
 const widget: InjectionWidgetModule<Record<string, unknown>, Record<string, unknown>> = {
   metadata: {

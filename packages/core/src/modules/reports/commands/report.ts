@@ -4,6 +4,7 @@ import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import type { CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
+import type { ReportDefinition } from '@open-mercato/shared/modules/reports/dsl'
 import { Report } from '../data/entities'
 import {
   reportCreateSchema,
@@ -21,7 +22,7 @@ import {
   invalidateReportCache,
   type ReportsCacheService,
 } from '../lib/result-cache'
-import { loadAclContext, requireTenant } from './shared'
+import { assertDefinitionSavable, loadAclContext, requireTenant } from './shared'
 
 async function invalidateCacheForReport(
   container: { resolve: <T>(name: string) => T },
@@ -66,6 +67,7 @@ const createReportCommand: CommandHandler<ReportCreateInput, { reportId: string 
     if (!canEditFolder(folder, acl)) {
       throw new CrudHttpError(403, { error: 'Forbidden' })
     }
+    await assertDefinitionSavable(input.datasetId, input.definition as ReportDefinition, acl.userFeatures)
     const report = em.create(Report, {
       organizationId,
       tenantId,
@@ -128,6 +130,9 @@ const updateReportCommand: CommandHandler<ReportUpdateInput, { reportId: string 
       ctx: acl,
     })
     if (perm !== 'edit') throw new CrudHttpError(403, { error: 'Forbidden' })
+    if (input.definition !== undefined) {
+      await assertDefinitionSavable(report.datasetId, input.definition as ReportDefinition, acl.userFeatures)
+    }
 
     if (input.name !== undefined) report.name = input.name
     if (input.description !== undefined) report.description = input.description ?? null

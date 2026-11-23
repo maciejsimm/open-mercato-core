@@ -541,6 +541,8 @@ export default function PersonDetailV2Page({ params }: { params?: { id?: string 
             }}
           />
 
+          <InjectionSpot spotId="detail:customers.person:after-header" context={injectionContext} data={data} />
+
           {/* Zone content shared between desktop (CollapsibleZoneLayout) and mobile (MobilePersonDetail). */}
           <CustomerDetailSidebar spotId={extensionPoints.hosts.personSidebar.spotId} context={injectionContext} data={data} onDataChange={setData} disabled={isSaving}>
           {(() => {

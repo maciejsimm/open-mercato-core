@@ -1,3 +1,4 @@
+import { hasAnyReportFeature } from './feature-access'
 import type {
   Dataset,
   DatasetField,
@@ -38,7 +39,7 @@ export function isFieldVisible(
 ): FieldAclDecision {
   const required = acl?.[fieldPath]
   if (!required?.length) return { field: fieldPath, allowed: true, missingFeatures: [] }
-  const hasAny = required.some((feat) => userFeatures.has(feat) || hasWildcardMatch(feat, userFeatures))
+  const hasAny = hasAnyReportFeature(userFeatures, required)
   return {
     field: fieldPath,
     allowed: hasAny,
@@ -46,15 +47,6 @@ export function isFieldVisible(
   }
 }
 
-function hasWildcardMatch(required: string, userFeatures: ReadonlySet<string>): boolean {
-  if (userFeatures.has(required)) return true
-  const parts = required.split('.')
-  for (let i = parts.length - 1; i > 0; i--) {
-    const candidate = parts.slice(0, i).join('.') + '.*'
-    if (userFeatures.has(candidate)) return true
-  }
-  return userFeatures.has('*')
-}
 
 /**
  * Step 1: builder-load enforcement.

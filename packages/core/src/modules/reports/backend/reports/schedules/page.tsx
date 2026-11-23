@@ -9,10 +9,11 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { apiCall, apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { Plus } from 'lucide-react'
+import { describeRawCadence, formatLabel, isScheduleFormat } from './components/cadence-text'
 
 type ScheduleRow = {
   id: string
@@ -51,6 +52,7 @@ function summarizeRecipients(recipients: ScheduleRow['recipients'], t: ReturnTyp
 
 export default function SchedulesListPage() {
   const t = useT()
+  const locale = useLocale()
   const scopeVersion = useOrganizationScopeVersion()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
@@ -149,12 +151,15 @@ export default function SchedulesListPage() {
       {
         accessorKey: 'cadence',
         header: t('reports.schedules.list.columns.cadence', 'Cadence'),
-        cell: ({ row }) => (
-          <div className="flex flex-col">
-            <span className="font-mono text-xs">{row.original.cadence}</span>
-            <span className="text-xs text-muted-foreground">{row.original.timezone}</span>
-          </div>
-        ),
+        cell: ({ row }) => {
+          const summary = describeRawCadence(row.original.cadence, row.original.timezone, t, locale)
+          return (
+            <div className="flex flex-col">
+              <span className="text-sm">{summary ?? row.original.cadence}</span>
+              <span className="font-mono text-xs text-muted-foreground">{row.original.cadence}</span>
+            </div>
+          )
+        },
       },
       {
         accessorKey: 'recipients',
@@ -164,7 +169,11 @@ export default function SchedulesListPage() {
       {
         accessorKey: 'formats',
         header: t('reports.schedules.list.columns.formats', 'Formats'),
-        cell: ({ row }) => <span className="font-mono text-xs uppercase">{row.original.formats.join(', ')}</span>,
+        cell: ({ row }) => (
+          <span className="text-sm">
+            {row.original.formats.map((format) => (isScheduleFormat(format) ? formatLabel(format, t) : format)).join(', ')}
+          </span>
+        ),
       },
       {
         accessorKey: 'nextRunAt',
@@ -183,7 +192,7 @@ export default function SchedulesListPage() {
         ),
       },
     ]
-  }, [t])
+  }, [locale, t])
 
   const newScheduleButton = (
     <Button asChild>

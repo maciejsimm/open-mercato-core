@@ -9,18 +9,15 @@ const dashboardsIcon = React.createElement(
   React.createElement('rect', { x: 3, y: 16, width: 7, height: 5, rx: 1 }),
 )
 
-// Top-level sidebar entry. `pageParent: null` overrides the default
-// URL-prefix nesting so this page does NOT appear as a child of
-// /backend/reports — it sits as its own sibling at the top level.
-// "New Schedule" and "New Embed" then explicitly nest UNDER this entry
-// via their own `pageParent`.
+// Top-level sidebar entry, second after Reports. `pageParent: null`
+// overrides URL-prefix nesting so it is a sibling of Reports, not a child.
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['reports.view'],
   pageTitle: 'Dashboards',
   pageTitleKey: 'reports.dashboards.nav.title',
   pageParent: null,
-  pagePriority: 50,
+  pagePriority: 60,
   pageOrder: 110,
   icon: dashboardsIcon,
   breadcrumb: [

@@ -82,6 +82,59 @@ export const datasets = [
     defaultSort: [{ field: 'created_at', dir: 'desc' }],
     defaultPageSize: 50,
   }),
+
+  defineDataset({
+    id: 'catalog.variants',
+    moduleId: 'catalog',
+    labelKey: 'catalog.reports.datasets.variants.label',
+    descriptionKey: 'catalog.reports.datasets.variants.description',
+    entityType: 'catalog:catalog_product_variant',
+    requiredFeatures: ['catalog.products.view'],
+    fields: [
+      { key: 'id', labelKey: 'catalog.reports.fields.variant.id', kind: 'id' },
+      { key: 'product_id', labelKey: 'catalog.reports.fields.variant.product_id', kind: 'fk' },
+      { key: 'name', labelKey: 'catalog.reports.fields.variant.name', kind: 'text', aggregations: ['count', 'count_distinct'] },
+      { key: 'sku', labelKey: 'catalog.reports.fields.variant.sku', kind: 'text', aggregations: ['count', 'count_distinct'] },
+      { key: 'barcode', labelKey: 'catalog.reports.fields.variant.barcode', kind: 'text' },
+      {
+        key: 'gtin_type',
+        labelKey: 'catalog.reports.fields.variant.gtin_type',
+        kind: 'enum',
+        options: ['ean13', 'ean8', 'upc', 'isbn', 'asin', 'mpn'],
+      },
+      { key: 'hs_code', labelKey: 'catalog.reports.fields.variant.hs_code', kind: 'text' },
+      { key: 'is_default', labelKey: 'catalog.reports.fields.variant.is_default', kind: 'boolean' },
+      { key: 'is_active', labelKey: 'catalog.reports.fields.variant.is_active', kind: 'boolean' },
+      {
+        key: 'weight_value',
+        labelKey: 'catalog.reports.fields.variant.weight_value',
+        kind: 'float',
+        aggregations: ['sum', 'avg', 'min', 'max'],
+      },
+      { key: 'weight_unit', labelKey: 'catalog.reports.fields.variant.weight_unit', kind: 'enum' },
+      { key: 'tax_rate_id', labelKey: 'catalog.reports.fields.variant.tax_rate_id', kind: 'fk' },
+      {
+        key: 'tax_rate',
+        labelKey: 'catalog.reports.fields.variant.tax_rate',
+        kind: 'float',
+        aggregations: ['avg', 'min', 'max'],
+      },
+      {
+        key: 'created_at',
+        labelKey: 'catalog.reports.fields.variant.created_at',
+        kind: 'datetime',
+        aggregations: ['min', 'max', 'count'],
+      },
+      {
+        key: 'updated_at',
+        labelKey: 'catalog.reports.fields.variant.updated_at',
+        kind: 'datetime',
+        aggregations: ['min', 'max', 'count'],
+      },
+    ],
+    defaultSort: [{ field: 'created_at', dir: 'desc' }],
+    defaultPageSize: 50,
+  }),
 ]
 
 export default datasets
