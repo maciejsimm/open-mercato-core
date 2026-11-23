@@ -33,9 +33,11 @@ import {
   useSensors,
   useDraggable,
   useDroppable,
-  closestCenter,
+  MeasuringStrategy,
+  pointerWithin,
+  rectIntersection,
+  type CollisionDetection,
   type DragEndEvent,
-  type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
 import {
@@ -43,75 +45,56 @@ import {
   useSortable,
   arrayMove,
   horizontalListSortingStrategy,
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
+import {
+  measureAlias,
+  type ChartKind,
+  type ColumnFormats,
+  type DateRangeToken,
+  type FieldFormat,
+  type FilterOp,
+  type MeasureExpr,
+  type ReportColumnDescriptor,
+  type ReportType,
+  type Sort,
+} from '@open-mercato/shared/modules/reports/dsl'
+import {
+  REPORT_TYPES,
+  SINGLE_SERIES_CHART_KINDS,
+  defaultDefinition,
+  reconcileChartDefinition,
+  switchDefinitionType,
+  type BuilderChartSpec,
+  type BuilderDateRangeFilter,
+  type BuilderDefinition,
+  type BuilderFilter,
+  type BuilderLiteralFilter,
+  type ChartDefinition,
+  type DraftStash,
+  type DroppedItem,
+  type FlatListDefinition,
+  type GroupedDefinition,
+  type PivotDefinition,
+  type SummaryDefinition,
+} from '../../../lib/definition-migrate'
+import { ResultTable, buildSeriesLabels, measureLabel } from './components/ResultView'
 
-type Aggregation = 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max'
-type ReportType = 'flat_list' | 'grouped' | 'pivot' | 'chart' | 'summary'
-type ChartType = 'bar' | 'line' | 'pie' | 'donut' | 'area' | 'scatter' | 'combo'
-
-type MeasureExpr = { field: string; aggregation: Aggregation; alias?: string }
-type SortShape = { field: string; dir: 'asc' | 'desc' }
-
-type FilterOp =
-  | 'eq' | 'ne' | 'in' | 'nin' | 'gt' | 'gte' | 'lt' | 'lte'
-  | 'contains' | 'starts_with' | 'ends_with'
-  | 'is_null' | 'is_not_null' | 'between'
-
-type DateRangeToken =
-  | 'today' | 'yesterday' | 'last_24h' | 'last_7_days' | 'last_30_days'
-  | 'mtd' | 'last_month' | 'qtd' | 'last_quarter' | 'ytd' | 'last_year' | 'custom'
-
-type LiteralFilter = { kind: 'literal'; field: string; op: FilterOp; value?: unknown }
-type ParameterFilter = { kind: 'parameter'; field: string; op: FilterOp; parameter: string }
-type DateRangeFilter = { kind: 'date_range'; field: string; token: DateRangeToken; from?: string; to?: string }
-type FilterShape = LiteralFilter | ParameterFilter | DateRangeFilter
-type ChartSpec = {
-  type: ChartType
-  xField: string
-  yFields: string[]
-  stacked?: boolean
-  showLegend?: boolean
-}
-
-type FlatListDef = {
-  type: 'flat_list'
-  fields: string[]
-  filters: FilterShape[]
-  sort: SortShape[]
-  limit?: number
-}
-type GroupedDef = {
-  type: 'grouped'
-  fields: string[]
-  groupBy: string[]
-  measures: MeasureExpr[]
-  filters: FilterShape[]
-  sort: SortShape[]
-  limit?: number
-}
-type PivotDef = {
-  type: 'pivot'
-  rows: string[]
-  cols: string[]
-  value: MeasureExpr | null
-  filters: FilterShape[]
-}
-type ChartDef = {
-  type: 'chart'
-  chart: ChartSpec
-  filters: FilterShape[]
-  groupBy: string[]
-  measures: MeasureExpr[]
-  limit?: number
-}
-type SummaryDef = {
-  type: 'summary'
-  measures: MeasureExpr[]
-  filters: FilterShape[]
-}
-
-type Definition = FlatListDef | GroupedDef | PivotDef | ChartDef | SummaryDef
+type Aggregation = MeasureExpr['aggregation']
+type ChartType = ChartKind
+type SortShape = Sort
+type LiteralFilter = BuilderLiteralFilter
+type DateRangeFilter = BuilderDateRangeFilter
+type FilterShape = BuilderFilter
+type ChartSpec = BuilderChartSpec
+type FlatListDef = FlatListDefinition
+type GroupedDef = GroupedDefinition
+type PivotDef = PivotDefinition
+type ChartDef = ChartDefinition
+type SummaryDef = SummaryDefinition
+type Definition = BuilderDefinition
 
 type ReportDetail = {
   id: string
@@ -167,8 +150,48 @@ type ReportRunResponse = {
   mode?: 'sync' | 'async'
   rows?: Array<Record<string, unknown>>
   total?: number
-  meta?: { fields?: string[] }
+  meta?: { fields?: string[]; columns?: ReportColumnDescriptor[]; mixedCurrencyColumns?: string[] }
   error?: { code?: string; message?: string }
+}
+
+type PreviewIssue = { path: string; message: string }
+type PreviewError = { message: string; issues: PreviewIssue[] }
+
+function readPreviewError(body: unknown, fallback: string): PreviewError {
+  const error = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined
+  if (!error || typeof error !== 'object') return { message: fallback, issues: [] }
+  const record = error as { message?: unknown; issues?: unknown }
+  const issues: PreviewIssue[] = Array.isArray(record.issues)
+    ? record.issues
+        .map((issue): PreviewIssue | null => {
+          if (!issue || typeof issue !== 'object') return null
+          const entry = issue as { path?: unknown; message?: unknown }
+          if (typeof entry.message !== 'string') return null
+          return { path: typeof entry.path === 'string' ? entry.path : '', message: entry.message }
+        })
+        .filter((issue): issue is PreviewIssue => issue !== null)
+    : []
+  return { message: typeof record.message === 'string' ? record.message : fallback, issues }
+}
+
+const FORMAT_DATE_STYLES = new Set(['short', 'medium', 'long'])
+
+function parseColumnFormats(raw: unknown): ColumnFormats | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: ColumnFormats = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue
+    const entry = value as Record<string, unknown>
+    const format: FieldFormat = {}
+    if (typeof entry.precision === 'number' && Number.isInteger(entry.precision)) format.precision = entry.precision
+    if (typeof entry.dateStyle === 'string' && FORMAT_DATE_STYLES.has(entry.dateStyle)) {
+      format.dateStyle = entry.dateStyle as FieldFormat['dateStyle']
+    }
+    if (entry.percent === true) format.percent = true
+    if (entry.compact === true) format.compact = true
+    if (Object.keys(format).length > 0) out[key] = format
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 const NUMERIC_KINDS = new Set(['integer', 'float', 'money'])
@@ -195,42 +218,20 @@ function fieldAllowedAggregations(field: DatasetFieldRow): Aggregation[] {
   return [...NON_NUMERIC_AGGREGATIONS]
 }
 
-function measureAlias(m: MeasureExpr): string {
-  if (m.alias && m.alias.trim()) return m.alias.trim()
-  return `${m.aggregation}_${m.field.replace(/[^a-zA-Z0-9_]/g, '_')}`
-}
-
-function defaultDefinition(type: ReportType): Definition {
-  switch (type) {
-    case 'flat_list':
-      return { type, fields: [], filters: [], sort: [] }
-    case 'grouped':
-      return { type, fields: [], groupBy: [], measures: [], filters: [], sort: [] }
-    case 'pivot':
-      return { type, rows: [], cols: [], value: null, filters: [] }
-    case 'chart':
-      return {
-        type,
-        chart: { type: 'bar', xField: '', yFields: [] },
-        filters: [],
-        groupBy: [],
-        measures: [],
-      }
-    case 'summary':
-      return { type, measures: [], filters: [] }
-  }
-}
-
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
 function parseDefinition(raw: unknown, fallbackType: ReportType): Definition {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const columnFormats = parseColumnFormats(obj.columnFormats)
+  const parsed = parseDefinitionSlots(obj, fallbackType)
+  return columnFormats ? { ...parsed, columnFormats } : parsed
+}
+
+function parseDefinitionSlots(obj: Record<string, unknown>, fallbackType: ReportType): Definition {
   const rawType = typeof obj.type === 'string' ? obj.type : fallbackType
-  const type = (['flat_list', 'grouped', 'pivot', 'chart', 'summary'].includes(rawType)
-    ? rawType
-    : fallbackType) as ReportType
+  const type = REPORT_TYPES.find((candidate) => candidate === rawType) ?? fallbackType
   if (type === 'flat_list') {
     return {
       type,
@@ -317,18 +318,6 @@ function parseParameters(raw: unknown): ParameterDef[] {
   return out
 }
 
-function migrateDefinition(prev: Definition, nextType: ReportType): Definition {
-  if (prev.type === nextType) return prev
-  const base = defaultDefinition(nextType)
-  // Best-effort field migration so the user does not lose their work.
-  if ((base.type === 'grouped' || base.type === 'flat_list') && (prev.type === 'flat_list' || prev.type === 'grouped')) {
-    const fields = 'fields' in prev ? prev.fields : []
-    if (base.type === 'flat_list') return { ...base, fields: [...fields] }
-    return { ...base, fields: [...fields] }
-  }
-  return base
-}
-
 /**
  * Apply a "drop field into zone" operation to the definition. Used by the
  * drag-and-drop layer (3.3b) and by the click-to-add code path so both
@@ -409,54 +398,146 @@ function addFieldToZone(
 }
 
 /**
- * Reorder a chip within its zone, or remove it when `toIndex` is null.
- * Mirrors `addFieldToZone`'s per-type/per-zone dispatch.
- *
- * `fromIndex` is the chip's current index inside the zone. `toIndex` may
- * be the destination index for a reorder, or null to remove. For measure
- * zones the index addresses `definition.measures`; for everything else it
- * addresses the relevant string-array zone.
+ * Client validity guard for the live preview. Mirrors the server rules for
+ * charts (F13b): with an explicit `groupBy` the X field must be one of its
+ * keys; without one, the X field is the implicit group key.
+ */
+function isPreviewable(def: Definition): boolean {
+  switch (def.type) {
+    case 'flat_list':
+      return def.fields.length > 0
+    case 'grouped':
+      return def.groupBy.length > 0 && def.measures.length > 0
+    case 'pivot':
+      return def.rows.length > 0 && !!def.value && !!def.value.field
+    case 'chart': {
+      if (def.measures.length === 0 || !def.chart.xField || def.chart.yFields.length === 0) return false
+      return def.groupBy.length === 0 || def.groupBy.includes(def.chart.xField)
+    }
+    case 'summary':
+      return def.measures.length > 0
+  }
+}
+
+const FIELD_DRAG_PREFIX = 'field:'
+const ZONE_DROP_PREFIX = 'zone:'
+const CHIP_PREFIX = 'chip:'
+const REMOVE_DROP_ID = 'remove-target'
+const MEASURE_ZONES = new Set(['measures', 'value'])
+
+function chipId(zoneId: string, key: string): string {
+  return `${CHIP_PREFIX}${zoneId}:${encodeURIComponent(key)}`
+}
+
+function parseChipId(id: string): { zoneId: string; key: string } | null {
+  if (!id.startsWith(CHIP_PREFIX)) return null
+  const rest = id.slice(CHIP_PREFIX.length)
+  const sep = rest.indexOf(':')
+  if (sep <= 0) return null
+  return { zoneId: rest.slice(0, sep), key: decodeURIComponent(rest.slice(sep + 1)) }
+}
+
+/** Stable chip keys for measures: the alias, suffixed only when two measures share one. */
+function measureChipKeys(measures: readonly MeasureExpr[]): string[] {
+  const seen = new Map<string, number>()
+  return measures.map((m) => {
+    const alias = measureAlias(m)
+    const count = seen.get(alias) ?? 0
+    seen.set(alias, count + 1)
+    return count === 0 ? alias : `${alias}#${count + 1}`
+  })
+}
+
+function zoneMeasures(def: Definition, zoneId: string): MeasureExpr[] | null {
+  if (zoneId === 'value' && def.type === 'pivot') return def.value && def.value.field ? [def.value] : []
+  if (zoneId === 'measures' && (def.type === 'grouped' || def.type === 'chart' || def.type === 'summary')) return def.measures
+  return null
+}
+
+function zoneStrings(def: Definition, zoneId: string): string[] | null {
+  if (zoneId === 'fields' && (def.type === 'flat_list' || def.type === 'grouped')) return def.fields
+  if (zoneId === 'groupBy' && (def.type === 'grouped' || def.type === 'chart')) return def.groupBy
+  if (def.type === 'pivot' && zoneId === 'rows') return def.rows
+  if (def.type === 'pivot' && zoneId === 'cols') return def.cols
+  return null
+}
+
+function zoneChipKeys(def: Definition, zoneId: string): string[] {
+  const measures = zoneMeasures(def, zoneId)
+  if (measures) return measureChipKeys(measures)
+  return zoneStrings(def, zoneId) ?? []
+}
+
+/** Dataset field a chip binds to (measure chips bind to `measure.field`). */
+function resolveChipFieldKey(def: Definition, zoneId: string, key: string): string | null {
+  const measures = zoneMeasures(def, zoneId)
+  if (measures) {
+    const idx = measureChipKeys(measures).indexOf(key)
+    return idx >= 0 ? measures[idx].field : null
+  }
+  return (zoneStrings(def, zoneId) ?? []).includes(key) ? key : null
+}
+
+/**
+ * Collision detection for the builder (F14): only droppables that make sense
+ * for the active drag compete — zones for sidebar fields, sibling chips plus
+ * the remove strip for chips. The pointer decides (`pointerWithin`), falling
+ * back to `rectIntersection`; among hits under the pointer the innermost
+ * (smallest) droppable wins.
+ */
+const builderCollisionDetection: CollisionDetection = (args) => {
+  const activeId = String(args.active.id)
+  const activeChip = parseChipId(activeId)
+  const droppableContainers = args.droppableContainers.filter((container) => {
+    if (container.disabled) return false
+    const id = String(container.id)
+    if (id === REMOVE_DROP_ID) return activeChip !== null
+    if (id.startsWith(ZONE_DROP_PREFIX)) return activeChip === null
+    const chip = parseChipId(id)
+    return chip !== null && activeChip !== null && chip.zoneId === activeChip.zoneId
+  })
+  const scoped = { ...args, droppableContainers }
+  const underPointer = pointerWithin(scoped)
+  if (underPointer.length === 0) return rectIntersection(scoped)
+  const area = (id: string | number): number => {
+    const rect = args.droppableRects.get(id)
+    return rect ? rect.width * rect.height : Number.POSITIVE_INFINITY
+  }
+  return [...underPointer].sort((left, right) => area(left.id) - area(right.id))
+}
+
+/**
+ * Reorder a chip within its zone (`toKey` = the chip it was dropped on), or
+ * remove it when `toKey` is null. Chips are addressed by stable keys — the
+ * field key, or the measure alias — so ids stay valid across reorders.
  */
 function moveChipInZone(
   prev: Definition,
   zoneId: string,
-  fromIndex: number,
-  toIndex: number | null,
+  fromKey: string,
+  toKey: string | null,
 ): Definition {
-  const reorderStrings = (list: string[]): string[] => {
-    if (toIndex === null) return list.filter((_, i) => i !== fromIndex)
-    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return list
-    return arrayMove(list, fromIndex, toIndex)
-  }
-  const reorderMeasures = (list: MeasureExpr[]): MeasureExpr[] => {
-    if (toIndex === null) return list.filter((_, i) => i !== fromIndex)
-    if (fromIndex < 0 || fromIndex >= list.length || toIndex < 0 || toIndex >= list.length) return list
-    return arrayMove(list, fromIndex, toIndex)
-  }
+  const keys = zoneChipKeys(prev, zoneId)
+  const fromIndex = keys.indexOf(fromKey)
+  if (fromIndex < 0) return prev
+  const toIndex = toKey === null ? -1 : keys.indexOf(toKey)
+  if (toKey !== null && (toIndex < 0 || toIndex === fromIndex)) return prev
+  const apply = <T,>(list: T[]): T[] =>
+    toKey === null ? list.filter((_, i) => i !== fromIndex) : arrayMove(list, fromIndex, toIndex)
 
-  if (prev.type === 'flat_list') {
-    if (zoneId === 'fields') return { ...prev, fields: reorderStrings(prev.fields) }
+  if (zoneId === 'value' && prev.type === 'pivot') {
+    return toKey === null ? { ...prev, value: null } : prev
+  }
+  if (MEASURE_ZONES.has(zoneId)) {
+    if (prev.type === 'grouped' || prev.type === 'chart' || prev.type === 'summary') {
+      return { ...prev, measures: apply(prev.measures) }
+    }
     return prev
   }
-  if (prev.type === 'grouped') {
-    if (zoneId === 'fields') return { ...prev, fields: reorderStrings(prev.fields) }
-    if (zoneId === 'groupBy') return { ...prev, groupBy: reorderStrings(prev.groupBy) }
-    if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
-    return prev
-  }
-  if (prev.type === 'pivot') {
-    if (zoneId === 'rows') return { ...prev, rows: reorderStrings(prev.rows) }
-    if (zoneId === 'cols') return { ...prev, cols: reorderStrings(prev.cols) }
-    if (zoneId === 'value' && toIndex === null) return { ...prev, value: { field: '', aggregation: 'count' } }
-    return prev
-  }
-  if (prev.type === 'chart') {
-    if (zoneId === 'groupBy') return { ...prev, groupBy: reorderStrings(prev.groupBy) }
-    if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
-    return prev
-  }
-  // summary
-  if (zoneId === 'measures') return { ...prev, measures: reorderMeasures(prev.measures) }
+  if (zoneId === 'fields' && (prev.type === 'flat_list' || prev.type === 'grouped')) return { ...prev, fields: apply(prev.fields) }
+  if (zoneId === 'groupBy' && (prev.type === 'grouped' || prev.type === 'chart')) return { ...prev, groupBy: apply(prev.groupBy) }
+  if (prev.type === 'pivot' && zoneId === 'rows') return { ...prev, rows: apply(prev.rows) }
+  if (prev.type === 'pivot' && zoneId === 'cols') return { ...prev, cols: apply(prev.cols) }
   return prev
 }
 
@@ -484,6 +565,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   const [runResult, setRunResult] = React.useState<ReportRunResponse | null>(null)
   const [previewResult, setPreviewResult] = React.useState<ReportRunResponse | null>(null)
   const [isPreviewing, setIsPreviewing] = React.useState(false)
+  const [previewError, setPreviewError] = React.useState<PreviewError | null>(null)
   const [viewMode, setViewMode] = React.useState<'edit' | 'run'>('edit')
   const [settingsOpen, setSettingsOpen] = React.useState(false)
 
@@ -538,6 +620,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
         setName(found.name)
         setDescription(found.description ?? '')
         setDefinition(parseDefinition(found.definition, found.type))
+        draftStash.current = {}
         setParameters(parseParameters(found.parameters))
 
         const datasetCall = await apiCall<DatasetDetail>(
@@ -603,6 +686,19 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
 
   const markDirty = React.useCallback(() => setIsDirty(true), [])
 
+  const editRevision = React.useRef(0)
+  const draftStash = React.useRef<DraftStash>({})
+  const [typeSwitchNotice, setTypeSwitchNotice] = React.useState<{ type: ReportType; dropped: DroppedItem[] } | null>(null)
+
+  const applyDefinition = React.useCallback((update: (prev: Definition) => Definition) => {
+    setDefinition((prev) => {
+      const next = reconcileChartDefinition(prev, update(prev))
+      if (next !== prev) editRevision.current += 1
+      return next
+    })
+    markDirty()
+  }, [markDirty])
+
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
@@ -615,148 +711,74 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
   }, [datasetFields])
 
   const [activeDragFieldKey, setActiveDragFieldKey] = React.useState<string | null>(null)
+  const [isDraggingChip, setIsDraggingChip] = React.useState(false)
   const activeDragField = activeDragFieldKey ? fieldByKey.get(activeDragFieldKey) ?? null : null
-  // `activeOverZone` tracks the zone the user is currently hovering during a
-  // drag. closestCenter picks the chip droppable inside a zone before the
-  // zone wrapper itself, so the wrapper's own `isOver` never fires. We bus
-  // the resolved zoneId down via context so `<Zone>` can highlight even
-  // when the chip droppable is the actual collision target.
-  const [activeOverZone, setActiveOverZone] = React.useState<string | null>(null)
-
-  /**
-   * Drag overlay label resolution: chips show the dataset field they bind to
-   * (for measure chips, that's `measure.field`). Sidebar drags reuse the
-   * field key directly. Both routes feed `activeDragFieldKey` so the
-   * `<DragOverlay>` renders the same chip everywhere.
-   */
-  const resolveChipFieldKey = React.useCallback((zoneId: string, chipIdx: number): string | null => {
-    const idx = Number.isFinite(chipIdx) ? chipIdx : -1
-    if (idx < 0) return null
-    if (definition.type === 'flat_list' && zoneId === 'fields') return definition.fields[idx] ?? null
-    if (definition.type === 'grouped') {
-      if (zoneId === 'fields') return definition.fields[idx] ?? null
-      if (zoneId === 'groupBy') return definition.groupBy[idx] ?? null
-      if (zoneId === 'measures') return definition.measures[idx]?.field ?? null
-    }
-    if (definition.type === 'pivot') {
-      if (zoneId === 'rows') return definition.rows[idx] ?? null
-      if (zoneId === 'cols') return definition.cols[idx] ?? null
-    }
-    if (definition.type === 'chart') {
-      if (zoneId === 'groupBy') return definition.groupBy[idx] ?? null
-      if (zoneId === 'measures') return definition.measures[idx]?.field ?? null
-    }
-    if (definition.type === 'summary' && zoneId === 'measures') return definition.measures[idx]?.field ?? null
-    return null
-  }, [definition])
 
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     const id = String(event.active.id)
-    if (id.startsWith('field:')) {
-      setActiveDragFieldKey(id.slice('field:'.length))
+    if (id.startsWith(FIELD_DRAG_PREFIX)) {
+      setIsDraggingChip(false)
+      setActiveDragFieldKey(id.slice(FIELD_DRAG_PREFIX.length))
       return
     }
-    if (id.startsWith('chip:')) {
-      // chip:<zoneId>:<index>
-      const rest = id.slice('chip:'.length)
-      const sep = rest.lastIndexOf(':')
-      if (sep < 0) { setActiveDragFieldKey(null); return }
-      const zoneId = rest.slice(0, sep)
-      const idx = Number(rest.slice(sep + 1))
-      setActiveDragFieldKey(resolveChipFieldKey(zoneId, idx))
-      return
-    }
-    setActiveDragFieldKey(null)
-  }, [resolveChipFieldKey])
+    const chip = parseChipId(id)
+    setIsDraggingChip(chip !== null)
+    setActiveDragFieldKey(chip ? resolveChipFieldKey(definition, chip.zoneId, chip.key) : null)
+  }, [definition])
 
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
     setActiveDragFieldKey(null)
-    setActiveOverZone(null)
+    setIsDraggingChip(false)
     if (!canEdit) return
     const { active, over } = event
     if (!over) return
     const aid = String(active.id)
     const oid = String(over.id)
 
-    // sidebar field → zone (add). Collision detection often resolves to a
-    // chip droppable inside the zone before the zone wrapper itself, so we
-    // also accept chip:<zoneId>:<idx> as the target and resolve the zone
-    // from it.
-    if (aid.startsWith('field:')) {
-      const fieldKey = aid.slice('field:'.length)
-      let targetZone: string | null = null
-      if (oid.startsWith('zone:')) {
-        targetZone = oid.slice('zone:'.length)
-      } else if (oid.startsWith('chip:')) {
-        const rest = oid.slice('chip:'.length)
-        const sep = rest.lastIndexOf(':')
-        if (sep >= 0) targetZone = rest.slice(0, sep)
-      }
-      // The sidebar's remove-target is a sink only for chips, not for sidebar
-      // fields — dragging from the sidebar back onto the sidebar is a no-op.
-      if (!targetZone || targetZone === '__remove__') return
-      setDefinition((prev) => addFieldToZone(prev, targetZone!, fieldKey, fieldByKey))
-      markDirty()
+    if (aid.startsWith(FIELD_DRAG_PREFIX)) {
+      const fieldKey = aid.slice(FIELD_DRAG_PREFIX.length)
+      if (!oid.startsWith(ZONE_DROP_PREFIX)) return
+      const targetZone = oid.slice(ZONE_DROP_PREFIX.length)
+      applyDefinition((prev) => addFieldToZone(prev, targetZone, fieldKey, fieldByKey))
       return
     }
 
-    if (aid.startsWith('chip:')) {
-      // chip:<zoneId>:<index>
-      const rest = aid.slice('chip:'.length)
-      const sep = rest.lastIndexOf(':')
-      if (sep < 0) return
-      const zoneId = rest.slice(0, sep)
-      const fromIndex = Number(rest.slice(sep + 1))
-      if (!Number.isFinite(fromIndex)) return
-
-      // chip dropped on the sidebar remove-zone → delete from source
-      if (oid === 'zone:__remove__') {
-        setDefinition((prev) => moveChipInZone(prev, zoneId, fromIndex, null))
-        markDirty()
-        return
-      }
-
-      // chip reorder within the same zone
-      if (oid.startsWith('chip:')) {
-        const oRest = oid.slice('chip:'.length)
-        const oSep = oRest.lastIndexOf(':')
-        if (oSep < 0) return
-        const oZone = oRest.slice(0, oSep)
-        const toIndex = Number(oRest.slice(oSep + 1))
-        if (oZone !== zoneId || !Number.isFinite(toIndex) || fromIndex === toIndex) return
-        setDefinition((prev) => moveChipInZone(prev, zoneId, fromIndex, toIndex))
-        markDirty()
-        return
-      }
+    const chip = parseChipId(aid)
+    if (!chip) return
+    if (oid === REMOVE_DROP_ID) {
+      applyDefinition((prev) => moveChipInZone(prev, chip.zoneId, chip.key, null))
+      return
     }
-  }, [canEdit, fieldByKey, markDirty])
+    const target = parseChipId(oid)
+    if (!target || target.zoneId !== chip.zoneId || target.key === chip.key) return
+    applyDefinition((prev) => moveChipInZone(prev, chip.zoneId, chip.key, target.key))
+  }, [applyDefinition, canEdit, fieldByKey])
 
   const handleDragCancel = React.useCallback(() => {
     setActiveDragFieldKey(null)
-    setActiveOverZone(null)
-  }, [])
-
-  const handleDragOver = React.useCallback((event: DragOverEvent) => {
-    const over = event.over
-    if (!over) { setActiveOverZone(null); return }
-    const oid = String(over.id)
-    if (oid.startsWith('zone:')) {
-      setActiveOverZone(oid.slice('zone:'.length))
-      return
-    }
-    if (oid.startsWith('chip:')) {
-      const rest = oid.slice('chip:'.length)
-      const sep = rest.lastIndexOf(':')
-      if (sep >= 0) { setActiveOverZone(rest.slice(0, sep)); return }
-    }
-    setActiveOverZone(null)
+    setIsDraggingChip(false)
   }, [])
 
   const handleTypeChange = React.useCallback((next: ReportType) => {
     if (!canEdit) return
-    setDefinition((prev) => migrateDefinition(prev, next))
+    const result = switchDefinitionType(definition, next, draftStash.current, editRevision.current)
+    draftStash.current = result.stash
+    setDefinition(result.definition)
+    setTypeSwitchNotice(result.dropped.length > 0 ? { type: next, dropped: result.dropped } : null)
     markDirty()
-  }, [canEdit, markDirty])
+  }, [canEdit, definition, markDirty])
+
+  const handleColumnFormatChange = React.useCallback((key: string, format: FieldFormat | undefined) => {
+    applyDefinition((prev) => {
+      const nextFormats: ColumnFormats = { ...(prev.columnFormats ?? {}) }
+      if (format) nextFormats[key] = format
+      else delete nextFormats[key]
+      const next: Definition = { ...prev }
+      if (Object.keys(nextFormats).length > 0) next.columnFormats = nextFormats
+      else delete next.columnFormats
+      return next
+    })
+  }, [applyDefinition])
 
   const handleSave = React.useCallback(async () => {
     if (!report || !canEdit) return
@@ -862,15 +884,9 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     // Heuristic validity guard: skip the call when the definition cannot
     // possibly return rows. The preview endpoint would reject these too,
     // but checking client-side keeps spinner noise down.
-    const def = definition as Definition
-    let valid = true
-    if (def.type === 'flat_list') valid = def.fields.length > 0
-    else if (def.type === 'grouped') valid = def.groupBy.length > 0 && def.measures.length > 0
-    else if (def.type === 'pivot') valid = def.rows.length > 0 && !!def.value && !!def.value.field
-    else if (def.type === 'chart') valid = (def.measures?.length ?? 0) > 0 && !!def.chart?.xField
-    else if (def.type === 'summary') valid = def.measures.length > 0
-    if (!valid) {
+    if (!isPreviewable(definition)) {
       setPreviewResult(null)
+      setPreviewError(null)
       setIsPreviewing(false)
       return
     }
@@ -879,7 +895,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
     const handle = setTimeout(async () => {
       setIsPreviewing(true)
       try {
-        const res = await readApiResultOrThrow<ReportRunResponse>('/api/reports/preview', {
+        const call = await apiCall<ReportRunResponse>('/api/reports/preview', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -889,13 +905,26 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
             limit: 10,
           }),
         })
-        if (token === previewToken.current) setPreviewResult(res ?? null)
+        if (token !== previewToken.current) return
+        if (call.ok) {
+          setPreviewResult(call.result ?? null)
+          setPreviewError(null)
+        } else {
+          setPreviewResult(null)
+          setPreviewError(readPreviewError(
+            call.result,
+            tRef.current('reports.detail.preview.failed', 'Preview failed (HTTP {status}).', { status: call.status }),
+          ))
+        }
       } catch (err) {
-        // Preview errors are not surfaced as flash messages — they would be
-        // noisy on every typed character. The user still gets a clear error
-        // on the explicit Run path.
-        if (typeof console !== 'undefined') console.debug('[reports/preview] failed', err)
-        if (token === previewToken.current) setPreviewResult(null)
+        if (token !== previewToken.current) return
+        setPreviewResult(null)
+        setPreviewError({
+          message: err instanceof Error && err.message
+            ? err.message
+            : tRef.current('reports.detail.preview.failedGeneric', 'Preview failed.'),
+          issues: [],
+        })
       } finally {
         if (token === previewToken.current) setIsPreviewing(false)
       }
@@ -960,13 +989,12 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
           {viewMode === 'edit' ? (
             <DndContext
               sensors={dndSensors}
-              collisionDetection={closestCenter}
+              collisionDetection={builderCollisionDetection}
+              measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
               onDragStart={handleDragStart}
-              onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
-            <ActiveOverZoneContext.Provider value={activeOverZone}>
               <div className="flex flex-col gap-4 lg:flex-row">
                 <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-60">
                   <div className="rounded-md border border-border bg-card p-3">
@@ -976,11 +1004,21 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                       canEdit={canEdit}
                       t={t}
                     />
+                    {typeSwitchNotice ? (
+                      <TypeSwitchNotice
+                        type={typeSwitchNotice.type}
+                        dropped={typeSwitchNotice.dropped}
+                        fieldByKey={fieldByKey}
+                        onDismiss={() => setTypeSwitchNotice(null)}
+                        t={t}
+                      />
+                    ) : null}
                   </div>
                   <FieldList
                     fields={datasetFields}
                     hiddenPaths={dataset?.hiddenFieldPaths ?? []}
                     canEdit={canEdit}
+                    isDraggingChip={isDraggingChip}
                     t={t}
                   />
                 </aside>
@@ -990,15 +1028,18 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                     parameters={parameters}
                     fields={datasetFields}
                     canEdit={canEdit}
-                    onDefinitionChange={(next) => { setDefinition(next); markDirty() }}
+                    onDefinitionChange={(next) => applyDefinition(() => next)}
                     onParametersChange={(next) => { setParameters(next); markDirty() }}
                     t={t}
                   />
                   <PreviewSection
                     definition={definition}
                     runResult={previewResult}
+                    previewError={previewError}
                     isRunning={isPreviewing}
                     viewMode="edit"
+                    fieldByKey={fieldByKey}
+                    onColumnFormatChange={canEdit ? handleColumnFormatChange : undefined}
                     t={t}
                   />
                 </div>
@@ -1014,7 +1055,6 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
                   </div>
                 ) : null}
               </DragOverlay>
-            </ActiveOverZoneContext.Provider>
             </DndContext>
           ) : (
             <PreviewSection
@@ -1022,6 +1062,7 @@ export default function ReportBuilderPage({ params }: { params?: { id?: string }
               runResult={runResult}
               isRunning={isRunning}
               viewMode="run"
+              fieldByKey={fieldByKey}
               t={t}
             />
           )}
@@ -1258,29 +1299,20 @@ type FieldListProps = {
   fields: DatasetFieldRow[]
   hiddenPaths: string[]
   canEdit: boolean
+  isDraggingChip: boolean
   t: ReturnType<typeof useT>
 }
 
-function FieldList({ fields, hiddenPaths, canEdit, t }: FieldListProps) {
-  // The sidebar doubles as a remove-target: dragging a chip back onto it
-  // removes that chip from its source zone (see handleDragEnd dispatch).
-  const removeDrop = useDroppable({ id: 'zone:__remove__', disabled: !canEdit })
+function FieldList({ fields, hiddenPaths, canEdit, isDraggingChip, t }: FieldListProps) {
   return (
-    <section
-      ref={removeDrop.setNodeRef}
-      className={cn(
-        'space-y-2 rounded-md border border-border bg-card p-3 transition-colors',
-        removeDrop.isOver ? 'border-status-danger-border bg-status-danger-bg/40' : '',
-      )}
-    >
+    <section className="space-y-2 rounded-md border border-border bg-card p-3">
       <h2 className="text-overline text-muted-foreground">{t('reports.detail.sections.fields', 'Dataset fields')}</h2>
       {canEdit && fields.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {removeDrop.isOver
-            ? t('reports.detail.fields.dropToRemove', 'Drop here to remove from the zone.')
-            : t('reports.detail.fields.dragHint', 'Drag a field into a zone. Drag a chip back here to remove.')}
+          {t('reports.detail.fields.dragHintZones', 'Drag a field into a zone. Drag a chip onto the remove strip to remove it.')}
         </p>
       ) : null}
+      {canEdit ? <RemoveDropStrip active={isDraggingChip} t={t} /> : null}
       {fields.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('reports.detail.fields.empty', 'No fields available for this dataset.')}</p>
       ) : (
@@ -1296,6 +1328,34 @@ function FieldList({ fields, hiddenPaths, canEdit, t }: FieldListProps) {
         </p>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * Explicit remove target (F14). It is a droppable only while a chip is being
+ * dragged, so a sidebar field can never resolve to it.
+ */
+function RemoveDropStrip({ active, t }: { active: boolean; t: ReturnType<typeof useT> }) {
+  const drop = useDroppable({ id: REMOVE_DROP_ID, disabled: !active })
+  if (!active) return <div ref={drop.setNodeRef} className="hidden" aria-hidden />
+  return (
+    <div
+      ref={drop.setNodeRef}
+      data-testid="reports-remove-drop-strip"
+      className={cn(
+        'flex items-center justify-center gap-2 rounded-md border border-dashed px-3 py-3 text-xs font-medium transition-colors',
+        drop.isOver
+          ? 'border-status-error-border bg-status-error-bg text-status-error-text'
+          : 'border-border bg-muted/40 text-muted-foreground',
+      )}
+    >
+      <Trash2 className="size-3.5" aria-hidden />
+      <span>
+        {drop.isOver
+          ? t('reports.detail.fields.dropToRemove', 'Drop here to remove from the zone.')
+          : t('reports.detail.fields.removeStrip', 'Drag a chip here to remove it')}
+      </span>
+    </div>
   )
 }
 
@@ -1343,7 +1403,7 @@ type TypeSelectProps = {
   t: ReturnType<typeof useT>
 }
 
-const TYPE_OPTIONS: ReadonlyArray<ReportType> = ['flat_list', 'grouped', 'pivot', 'chart', 'summary']
+const TYPE_OPTIONS: ReadonlyArray<ReportType> = REPORT_TYPES
 
 function TypeSelect({ value, onChange, canEdit, t }: TypeSelectProps) {
   return (
@@ -1548,21 +1608,14 @@ type ZoneProps = {
   isEmpty?: boolean
 }
 
-const ActiveOverZoneContext = React.createContext<string | null>(null)
-
 function Zone({ zoneId, title, description, children, emptyLabel, isEmpty }: ZoneProps) {
-  const drop = useDroppable({ id: zoneId ? `zone:${zoneId}` : `zone:__inert__`, disabled: !zoneId })
-  // Page-level drag tracker fills this when the active drag's resolved
-  // target zone is *this* zone — covers the closestCenter case where the
-  // chip droppable wins collision detection over the zone wrapper.
-  const activeOverZone = React.useContext(ActiveOverZoneContext)
-  const isHovered = drop.isOver || (zoneId != null && activeOverZone === zoneId)
+  const drop = useDroppable({ id: zoneId ? `${ZONE_DROP_PREFIX}${zoneId}` : `${ZONE_DROP_PREFIX}__inert__`, disabled: !zoneId })
   return (
     <section
       ref={drop.setNodeRef}
       className={cn(
         'space-y-2 rounded-md border border-dashed border-border bg-card/60 p-3 transition-colors',
-        isHovered ? 'border-primary bg-primary/5' : '',
+        drop.isOver ? 'border-primary bg-primary/5' : '',
       )}
       data-zone-id={zoneId}
     >
@@ -1656,14 +1709,18 @@ type ChipProps = {
   disabled?: boolean
   children?: React.ReactNode
   /**
-   * When provided, the chip becomes draggable + sortable. Format:
-   * `chip:<zoneId>:<index>`. The page-level DnD handler reads this id
-   * to dispatch reorder (chip → chip) and remove (chip → sidebar) events.
+   * When provided, the chip becomes draggable + sortable. Built by
+   * `chipId(zoneId, key)` from the field key / measure alias, so it stays
+   * stable across reorders. Drives reorder (chip → chip) and remove
+   * (chip → remove strip).
    */
   dragId?: string
 }
 
 function Chip({ label, sublabel, onRemove, disabled, children, dragId }: ChipProps) {
+  const t = useT()
+  const dragLabel = t('reports.detail.chip.drag', 'Drag {name} to reorder', { name: label })
+  const removeLabel = t('reports.detail.chip.remove', 'Remove {name}', { name: label })
   const sortable = useSortable({ id: dragId ?? '__chip_inert__', disabled: !dragId || disabled })
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = sortable
   const handleStyle: React.CSSProperties | undefined = dragId
@@ -1683,7 +1740,7 @@ function Chip({ label, sublabel, onRemove, disabled, children, dragId }: ChipPro
           className={cn('flex shrink-0 items-center text-muted-foreground', disabled ? 'opacity-50' : 'cursor-grab active:cursor-grabbing')}
           {...(disabled ? {} : attributes)}
           {...(disabled ? {} : listeners)}
-          aria-label="Drag to reorder"
+          aria-label={dragLabel}
         >
           <GripVertical className="size-3.5" aria-hidden />
         </span>
@@ -1699,7 +1756,7 @@ function Chip({ label, sublabel, onRemove, disabled, children, dragId }: ChipPro
           className={cn('ml-1 rounded-sm p-0.5 hover:bg-muted', disabled ? 'opacity-50' : '')}
           onClick={() => { if (!disabled) onRemove() }}
           disabled={disabled}
-          aria-label="Remove"
+          aria-label={removeLabel}
         >
           <X className="size-3.5" aria-hidden />
         </button>
@@ -1738,16 +1795,16 @@ function FlatListCanvas({ definition, fields, canEdit, onChange, t }: FlatListCa
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
         <SortableContext
-          items={definition.fields.map((_, i) => `chip:fields:${i}`)}
+          items={definition.fields.map((key) => chipId('fields', key))}
           strategy={horizontalListSortingStrategy}
         >
           <div className="flex flex-wrap items-center gap-2">
-            {definition.fields.map((fieldKey, idx) => {
+            {definition.fields.map((fieldKey) => {
               const field = fieldByKey.get(fieldKey)
               return (
                 <Chip
                   key={fieldKey}
-                  dragId={canEdit ? `chip:fields:${idx}` : undefined}
+                  dragId={canEdit ? chipId('fields', fieldKey) : undefined}
                   label={field ? t(field.labelKey, field.key) : fieldKey}
                   sublabel={fieldKey}
                   disabled={!canEdit}
@@ -1881,16 +1938,16 @@ function GroupedCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }:
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
         <SortableContext
-          items={definition.groupBy.map((_, i) => `chip:groupBy:${i}`)}
+          items={definition.groupBy.map((key) => chipId('groupBy', key))}
           strategy={horizontalListSortingStrategy}
         >
           <div className="flex flex-wrap items-center gap-2">
-            {definition.groupBy.map((key, idx) => {
+            {definition.groupBy.map((key) => {
               const field = fieldByKey.get(key)
               return (
                 <Chip
                   key={key}
-                  dragId={canEdit ? `chip:groupBy:${idx}` : undefined}
+                  dragId={canEdit ? chipId('groupBy', key) : undefined}
                   label={field ? t(field.labelKey, field.key) : key}
                   sublabel={key}
                   disabled={!canEdit}
@@ -1954,6 +2011,7 @@ function MeasureZone({
     if (allowMultiple) return new Set<string>()
     return new Set(measures.map((m) => m.field))
   }, [allowMultiple, measures])
+  const chipKeys = React.useMemo(() => measureChipKeys(measures), [measures])
 
   const addMeasure = (fieldKey: string) => {
     const field = fieldByKey.get(fieldKey)
@@ -1976,6 +2034,56 @@ function MeasureZone({
     onChange(next)
   }
 
+  const rows = measures.map((measure, idx) => {
+    const field = fieldByKey.get(measure.field)
+    const allowed = field ? fieldAllowedAggregations(field) : [...ALL_AGGREGATIONS]
+    return (
+      <SortableMeasureRow
+        key={`${measure.field}-${idx}`}
+        dragId={canEdit && zoneId ? chipId(zoneId, chipKeys[idx]) : undefined}
+        label={measureLabel(measure, fieldByKey, t)}
+        t={t}
+      >
+        <span className="text-xs font-medium uppercase text-muted-foreground">
+          {t(`reports.detail.aggregation.${measure.aggregation}`, measure.aggregation)}
+        </span>
+        <span className="font-medium">
+          {field ? t(field.labelKey, field.key) : measure.field}
+        </span>
+        <span className="font-mono text-xs text-muted-foreground">{measure.field}</span>
+        <select
+          value={measure.aggregation}
+          onChange={(e) => {
+            const next = allowed.find((agg) => agg === e.target.value)
+            if (next) updateMeasure(idx, { aggregation: next })
+          }}
+          disabled={!canEdit}
+          className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          {allowed.map((agg) => (
+            <option key={agg} value={agg}>{t(`reports.detail.aggregation.${agg}`, agg)}</option>
+          ))}
+        </select>
+        <Input
+          value={measure.alias ?? ''}
+          onChange={(e) => updateMeasure(idx, { alias: e.target.value || undefined })}
+          disabled={!canEdit}
+          placeholder={measureAlias(measure)}
+          className="h-8 w-40 text-xs"
+        />
+        <button
+          type="button"
+          className="ml-auto rounded-sm p-1 hover:bg-muted disabled:opacity-50"
+          onClick={() => canEdit && removeMeasure(idx)}
+          disabled={!canEdit}
+          aria-label={t('reports.detail.actions.removeMeasure', 'Remove measure')}
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </SortableMeasureRow>
+    )
+  })
+
   return (
     <Zone
       zoneId={zoneId}
@@ -1985,50 +2093,11 @@ function MeasureZone({
       emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
     >
       <div className="flex flex-col gap-2">
-        {measures.map((measure, idx) => {
-          const field = fieldByKey.get(measure.field)
-          const allowed = field ? fieldAllowedAggregations(field) : [...ALL_AGGREGATIONS]
-          return (
-            <div
-              key={`${measure.field}-${idx}`}
-              className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1"
-            >
-              <span className="text-xs font-medium uppercase text-muted-foreground">
-                {t(`reports.detail.aggregation.${measure.aggregation}`, measure.aggregation)}
-              </span>
-              <span className="font-medium">
-                {field ? t(field.labelKey, field.key) : measure.field}
-              </span>
-              <span className="font-mono text-xs text-muted-foreground">{measure.field}</span>
-              <select
-                value={measure.aggregation}
-                onChange={(e) => updateMeasure(idx, { aggregation: e.target.value as Aggregation })}
-                disabled={!canEdit}
-                className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs"
-              >
-                {allowed.map((agg) => (
-                  <option key={agg} value={agg}>{t(`reports.detail.aggregation.${agg}`, agg)}</option>
-                ))}
-              </select>
-              <Input
-                value={measure.alias ?? ''}
-                onChange={(e) => updateMeasure(idx, { alias: e.target.value || undefined })}
-                disabled={!canEdit}
-                placeholder={measureAlias(measure)}
-                className="h-8 w-40 text-xs"
-              />
-              <button
-                type="button"
-                className="ml-auto rounded-sm p-1 hover:bg-muted disabled:opacity-50"
-                onClick={() => canEdit && removeMeasure(idx)}
-                disabled={!canEdit}
-                aria-label={t('reports.detail.actions.removeMeasure', 'Remove measure')}
-              >
-                <X className="size-3.5" aria-hidden />
-              </button>
-            </div>
-          )
-        })}
+        {zoneId ? (
+          <SortableContext items={chipKeys.map((key) => chipId(zoneId, key))} strategy={verticalListSortingStrategy}>
+            {rows}
+          </SortableContext>
+        ) : rows}
         <div>
           <FieldPicker
             fields={fields}
@@ -2041,6 +2110,45 @@ function MeasureZone({
         </div>
       </div>
     </Zone>
+  )
+}
+
+function SortableMeasureRow({
+  dragId,
+  label,
+  children,
+  t,
+}: {
+  dragId?: string
+  label: string
+  children: React.ReactNode
+  t: ReturnType<typeof useT>
+}) {
+  const sortable = useSortable({ id: dragId ?? '__measure_inert__', disabled: !dragId })
+  const style: React.CSSProperties | undefined = dragId
+    ? { transform: CSS.Transform.toString(sortable.transform), transition: sortable.transition }
+    : undefined
+  return (
+    <div
+      ref={dragId ? sortable.setNodeRef : undefined}
+      style={style}
+      className={cn(
+        'flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1',
+        sortable.isDragging ? 'opacity-50' : '',
+      )}
+    >
+      {dragId ? (
+        <span
+          className="flex shrink-0 cursor-grab items-center text-muted-foreground active:cursor-grabbing"
+          {...sortable.attributes}
+          {...sortable.listeners}
+          aria-label={t('reports.detail.chip.drag', 'Drag {name} to reorder', { name: label })}
+        >
+          <GripVertical className="size-3.5" aria-hidden />
+        </span>
+      ) : null}
+      {children}
+    </div>
   )
 }
 
@@ -2076,16 +2184,16 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
         <SortableContext
-          items={definition.rows.map((_, i) => `chip:rows:${i}`)}
+          items={definition.rows.map((key) => chipId('rows', key))}
           strategy={horizontalListSortingStrategy}
         >
           <div className="flex flex-wrap items-center gap-2">
-            {definition.rows.map((key, idx) => {
+            {definition.rows.map((key) => {
               const field = fieldByKey.get(key)
               return (
                 <Chip
                   key={key}
-                  dragId={canEdit ? `chip:rows:${idx}` : undefined}
+                  dragId={canEdit ? chipId('rows', key) : undefined}
                   label={field ? t(field.labelKey, field.key) : key}
                   sublabel={key}
                   disabled={!canEdit}
@@ -2113,16 +2221,16 @@ function PivotCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: P
         emptyLabel={t('reports.detail.zones.empty', 'Empty — add at least one field.')}
       >
         <SortableContext
-          items={definition.cols.map((_, i) => `chip:cols:${i}`)}
+          items={definition.cols.map((key) => chipId('cols', key))}
           strategy={horizontalListSortingStrategy}
         >
           <div className="flex flex-wrap items-center gap-2">
-            {definition.cols.map((key, idx) => {
+            {definition.cols.map((key) => {
               const field = fieldByKey.get(key)
               return (
                 <Chip
                   key={key}
-                  dragId={canEdit ? `chip:cols:${idx}` : undefined}
+                  dragId={canEdit ? chipId('cols', key) : undefined}
                   label={field ? t(field.labelKey, field.key) : key}
                   sublabel={key}
                   disabled={!canEdit}
@@ -2195,15 +2303,15 @@ type ChartCanvasProps = {
 function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: ChartCanvasProps) {
   const categoricalFields = React.useMemo(() => fields.filter(isFieldCategorical), [fields])
   const groupBySet = React.useMemo(() => new Set(definition.groupBy), [definition.groupBy])
-  const measureAliases = React.useMemo(
-    () => definition.measures.map((m) => measureAlias(m)),
-    [definition.measures],
+  const measureOptions = React.useMemo(
+    () => definition.measures.map((m) => ({ alias: measureAlias(m), label: measureLabel(m, fieldByKey, t) })),
+    [definition.measures, fieldByKey, t],
   )
   const xCandidates = definition.groupBy.length > 0
     ? categoricalFields.filter((f) => groupBySet.has(f.key))
     : categoricalFields
-  const yCandidatesAliases = measureAliases
   const yFieldsSet = React.useMemo(() => new Set(definition.chart.yFields), [definition.chart.yFields])
+  const singleSeries = SINGLE_SERIES_CHART_KINDS.has(definition.chart.type)
 
   const updateChart = (patch: Partial<ChartSpec>) => onChange({
     ...definition,
@@ -2247,13 +2355,18 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
         </div>
         <div className="space-y-1 pt-2">
           <span className="text-xs font-medium text-muted-foreground">{t('reports.detail.chart.yFields', 'Y series')}</span>
-          {yCandidatesAliases.length === 0 ? (
+          {singleSeries && measureOptions.length > 1 ? (
+            <p className="text-xs text-muted-foreground">
+              {t('reports.detail.chart.singleSeriesHint', 'This chart type plots one series — pick which measure to show.')}
+            </p>
+          ) : null}
+          {measureOptions.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               {t('reports.detail.chart.yFieldsEmpty', 'Add at least one measure below; the chart will plot its alias.')}
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
-              {yCandidatesAliases.map((alias) => {
+              {measureOptions.map(({ alias, label }) => {
                 const selected = yFieldsSet.has(alias)
                 return (
                   <Button
@@ -2261,14 +2374,17 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
                     type="button"
                     size="sm"
                     variant={selected ? 'default' : 'outline'}
+                    title={alias}
                     onClick={() => updateChart({
-                      yFields: selected
-                        ? definition.chart.yFields.filter((y) => y !== alias)
-                        : [...definition.chart.yFields, alias],
+                      yFields: singleSeries
+                        ? [alias]
+                        : selected
+                          ? definition.chart.yFields.filter((y) => y !== alias)
+                          : [...definition.chart.yFields, alias],
                     })}
                     disabled={!canEdit}
                   >
-                    {alias}
+                    {label}
                   </Button>
                 )
               })}
@@ -2303,16 +2419,16 @@ function ChartCanvas({ definition, fields, fieldByKey, canEdit, onChange, t }: C
         description={t('reports.detail.zones.chartGroupByHint', 'Optional: explicit groupBy for the underlying execution. Defaults to the X field.')}
       >
         <SortableContext
-          items={definition.groupBy.map((_, i) => `chip:groupBy:${i}`)}
+          items={definition.groupBy.map((key) => chipId('groupBy', key))}
           strategy={horizontalListSortingStrategy}
         >
           <div className="flex flex-wrap items-center gap-2">
-            {definition.groupBy.map((key, idx) => {
+            {definition.groupBy.map((key) => {
               const field = fieldByKey.get(key)
               return (
                 <Chip
                   key={key}
-                  dragId={canEdit ? `chip:groupBy:${idx}` : undefined}
+                  dragId={canEdit ? chipId('groupBy', key) : undefined}
                   label={field ? t(field.labelKey, field.key) : key}
                   sublabel={key}
                   disabled={!canEdit}
@@ -3128,21 +3244,144 @@ function renderParameterDefaultInput(
   )
 }
 
+// ---------- Type switch notice ----------
+
+const DROPPED_SLOT_ORDER: ReadonlyArray<DroppedItem['slot']> = ['fields', 'groupBy', 'cols', 'measures', 'sort', 'limit', 'chart']
+
+const DROPPED_SLOT_LABELS: Record<DroppedItem['slot'], { key: string; fallback: string }> = {
+  fields: { key: 'reports.detail.typeSwitch.slots.fields', fallback: 'Fields' },
+  groupBy: { key: 'reports.detail.typeSwitch.slots.groupBy', fallback: 'Group by' },
+  cols: { key: 'reports.detail.typeSwitch.slots.cols', fallback: 'Pivot columns' },
+  measures: { key: 'reports.detail.typeSwitch.slots.measures', fallback: 'Measures' },
+  sort: { key: 'reports.detail.typeSwitch.slots.sort', fallback: 'Sort' },
+  limit: { key: 'reports.detail.typeSwitch.slots.limit', fallback: 'Limit' },
+  chart: { key: 'reports.detail.typeSwitch.slots.chart', fallback: 'Chart settings' },
+}
+
+function droppedItemLabel(item: DroppedItem, fieldByKey: Map<string, DatasetFieldRow>, t: ReturnType<typeof useT>): string {
+  switch (item.slot) {
+    case 'measures':
+      return measureLabel({ field: item.field, aggregation: item.aggregation }, fieldByKey, t)
+    case 'limit':
+      return String(item.value)
+    case 'chart':
+      return t(`reports.detail.chart.kind.${item.chartType}`, item.chartType)
+    default: {
+      const field = fieldByKey.get(item.field)
+      return field ? t(field.labelKey, field.key) : item.field
+    }
+  }
+}
+
+function TypeSwitchNotice({
+  type,
+  dropped,
+  fieldByKey,
+  onDismiss,
+  t,
+}: {
+  type: ReportType
+  dropped: DroppedItem[]
+  fieldByKey: Map<string, DatasetFieldRow>
+  onDismiss: () => void
+  t: ReturnType<typeof useT>
+}) {
+  const groups = DROPPED_SLOT_ORDER
+    .map((slot) => ({ slot, items: dropped.filter((item) => item.slot === slot) }))
+    .filter((group) => group.items.length > 0)
+  return (
+    <Alert
+      status="warning"
+      size="sm"
+      className="mt-3"
+      dismissible
+      onDismiss={onDismiss}
+      dismissAriaLabel={t('reports.detail.typeSwitch.dismiss', 'Dismiss')}
+      data-testid="reports-type-switch-notice"
+    >
+      <AlertDescription>
+        <p>
+          {t('reports.detail.typeSwitch.dropped', '{type} cannot keep everything. Not carried over:', {
+            type: t(`reports.list.types.${type}`, type),
+          })}
+        </p>
+        <ul className="mt-1 space-y-0.5">
+          {groups.map((group) => (
+            <li key={group.slot}>
+              <span className="font-medium">{t(DROPPED_SLOT_LABELS[group.slot].key, DROPPED_SLOT_LABELS[group.slot].fallback)}:</span>{' '}
+              {group.items.map((item) => droppedItemLabel(item, fieldByKey, t)).join(', ')}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1">
+          {t('reports.detail.typeSwitch.restoreHint', 'Switch back without editing to restore the previous setup.')}
+        </p>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 // ---------- Preview ----------
 
 type PreviewSectionProps = {
   definition: Definition
   runResult: ReportRunResponse | null
+  previewError?: PreviewError | null
   isRunning: boolean
   viewMode: 'edit' | 'run'
+  fieldByKey: Map<string, DatasetFieldRow>
+  onColumnFormatChange?: (key: string, format: FieldFormat | undefined) => void
   t: ReturnType<typeof useT>
 }
 
-function PreviewSection({ definition, runResult, isRunning, viewMode, t }: PreviewSectionProps) {
+function previewIssueLabel(path: string, t: ReturnType<typeof useT>): string {
+  const segments = path.split('.').filter((segment) => segment !== 'definition')
+  if (segments.length === 0) return ''
+  return t(`reports.detail.preview.issuePath.${segments.join('.')}`, segments.join(' › '))
+}
+
+function PreviewErrorPanel({ error, t }: { error: PreviewError; t: ReturnType<typeof useT> }) {
+  return (
+    <Alert status="error" size="sm" className="mt-2" data-testid="reports-preview-error">
+      <AlertDescription>
+        <p className="font-medium">{t('reports.detail.preview.invalid', 'The preview could not run:')}</p>
+        {error.issues.length > 0 ? (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {error.issues.map((issue, idx) => {
+              const label = previewIssueLabel(issue.path, t)
+              return (
+                <li key={`${issue.path}-${idx}`}>
+                  {label ? <span className="font-medium">{label}: </span> : null}
+                  {issue.message}
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <p className="mt-1">{error.message}</p>
+        )}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+function PreviewSection({
+  definition,
+  runResult,
+  previewError,
+  isRunning,
+  viewMode,
+  fieldByKey,
+  onColumnFormatChange,
+  t,
+}: PreviewSectionProps) {
   const renderedRows = Array.isArray(runResult?.rows) ? runResult!.rows! : []
   const renderedColumns = runResult?.meta?.fields && runResult.meta.fields.length
     ? runResult.meta.fields
     : (renderedRows[0] ? Object.keys(renderedRows[0]) : [])
+  const columns = runResult?.meta?.columns
+  const mixedCurrencyColumns = runResult?.meta?.mixedCurrencyColumns
+  const seriesLabels = React.useMemo(() => buildSeriesLabels(definition, fieldByKey, t), [definition, fieldByKey, t])
 
   // Run mode expands the section to fill the viewport so the result table /
   // chart is the focal element. Edit mode keeps a smaller minimum height so
@@ -3153,20 +3392,41 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
   const headingLabel = viewMode === 'run'
     ? t('reports.detail.sections.result', 'Result')
     : t('reports.detail.sections.previewLive', 'Live preview (10 rows)')
+  const waitingLabel = t(
+    viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun',
+    viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.',
+  )
+  const errorPanel = previewError ? <PreviewErrorPanel error={previewError} t={t} /> : null
 
   if (definition.type === 'chart') {
+    const mixedSeries = (mixedCurrencyColumns ?? []).filter((key) => definition.chart.yFields.includes(key))
     return (
       <section className={sectionClass}>
         <h2 className="text-overline text-muted-foreground">{headingLabel}</h2>
-        {renderedRows.length === 0 && !isRunning ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {runResult
-              ? t('reports.detail.preview.empty', 'The report returned no rows.')
-              : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
+        {errorPanel}
+        {mixedSeries.length > 0 ? (
+          <p className="mt-2 text-xs text-status-warning-text">
+            {t('reports.format.mixedCurrency', 'Mixed currencies — not summed across currencies')}
+            {': '}
+            {mixedSeries.map((key) => seriesLabels[key] ?? key).join(', ')}
           </p>
+        ) : null}
+        {renderedRows.length === 0 && !isRunning ? (
+          previewError ? null : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {runResult ? t('reports.detail.preview.empty', 'The report returned no rows.') : waitingLabel}
+            </p>
+          )
         ) : (
           <div className="mt-3">
-            <ReportChart spec={definition.chart} rows={renderedRows} loading={isRunning} />
+            <ReportChart
+              spec={definition.chart}
+              rows={renderedRows}
+              loading={isRunning}
+              columns={columns}
+              columnFormats={definition.columnFormats}
+              seriesLabels={seriesLabels}
+            />
           </div>
         )}
       </section>
@@ -3180,43 +3440,32 @@ function PreviewSection({ definition, runResult, isRunning, viewMode, t }: Previ
         <span className="text-xs text-muted-foreground">
           {runResult?.total != null
             ? t('reports.detail.preview.rowCount', '{count} rows').replace('{count}', String(runResult.total))
-            : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
+            : previewError ? null : waitingLabel}
         </span>
       </div>
+      {errorPanel}
       {isRunning ? (
         <div className="flex items-center justify-center py-8">
           <Spinner />
         </div>
       ) : renderedRows.length === 0 ? (
-        <p className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
-          {runResult ? t('reports.detail.preview.empty', 'The report returned no rows.') : t(viewMode === 'edit' ? 'reports.detail.preview.previewWaiting' : 'reports.detail.preview.notRun', viewMode === 'edit' ? 'Add at least one field — preview will appear here.' : 'Click "Run" to execute this report.')}
-        </p>
+        previewError ? null : (
+          <p className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+            {runResult ? t('reports.detail.preview.empty', 'The report returned no rows.') : waitingLabel}
+          </p>
+        )
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                {renderedColumns.map((col) => (
-                  <th key={col} className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">{col}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {renderedRows.map((row, idx) => (
-                <tr key={idx} className="border-b border-border/60 last:border-b-0">
-                  {renderedColumns.map((col) => {
-                    const value = row[col]
-                    let display: string
-                    if (value == null) display = '—'
-                    else if (typeof value === 'object') display = JSON.stringify(value)
-                    else display = String(value)
-                    return <td key={col} className="px-3 py-2 align-top">{display}</td>
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ResultTable
+          rows={renderedRows}
+          columnKeys={renderedColumns}
+          columns={columns}
+          mixedCurrencyColumns={mixedCurrencyColumns}
+          definition={definition}
+          fieldByKey={fieldByKey}
+          canEditFormats={viewMode === 'edit' && !!onColumnFormatChange}
+          onColumnFormatChange={onColumnFormatChange}
+          t={t}
+        />
       )}
     </section>
   )
