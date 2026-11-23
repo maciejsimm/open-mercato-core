@@ -13,6 +13,7 @@ import {
   getEmbedHostSpotForEntity,
   readHostRecordField,
   resolveEmbedParams,
+  withHostRecordId,
   type EmbedBinding,
   type EmbedBindings,
 } from '../../../lib/embed-spots'
@@ -65,6 +66,8 @@ type DashboardRunResponse = {
 type HostContext = {
   spotId?: string
   resourceKind?: string
+  resourceId?: string
+  recordId?: string
   pageContext?: { recordId?: string; entityId?: string }
 }
 
@@ -83,13 +86,14 @@ export function resolveHostSpotId(spotId: string | undefined, context: HostConte
 }
 
 function inferRecordId(data: HostData, context: HostContext | undefined): string | null {
-  const fromContext = context?.pageContext?.recordId
-  if (typeof fromContext === 'string' && fromContext.length > 0) return fromContext
+  for (const fromContext of [context?.pageContext?.recordId, context?.resourceId, context?.recordId]) {
+    if (typeof fromContext === 'string' && fromContext.length > 0) return fromContext
+  }
   if (!data || typeof data !== 'object') return null
   const obj = data as Record<string, unknown>
   const direct = obj.id ?? obj.recordId
   if (typeof direct === 'string' && direct.length > 0) return direct
-  for (const key of ['person', 'company', 'record']) {
+  for (const key of ['person', 'company', 'deal', 'record']) {
     const innerId = readHostRecordField(obj, `${key}.id`)
     if (typeof innerId === 'string' && innerId.length > 0) return innerId
   }
@@ -113,7 +117,9 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
   React.useEffect(() => { tRef.current = t }, [t])
 
   const resolvedSpotId = resolveHostSpotId(spotId, context)
-  const hostEntityId = getEmbedHostSpot(resolvedSpotId)?.hostEntityId ?? ''
+  const recordId = inferRecordId(data, context)
+  const hostEntityId = recordId ? getEmbedHostSpot(resolvedSpotId)?.hostEntityId ?? '' : ''
+  const hostData = React.useMemo(() => withHostRecordId(data, recordId), [data, recordId])
 
   const [embeds, setEmbeds] = React.useState<EmbedRow[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
@@ -186,7 +192,7 @@ export default function RecordEmbedHostWidget({ spotId, context, data }: RecordE
           artifactId={embed.artifactId}
           paramBindings={embed.paramBindings}
           displayTitle={embed.displayTitle}
-          hostData={data}
+          hostData={hostData}
         />
       ))}
     </section>
@@ -199,13 +205,23 @@ export type EmbedCardProps = {
   paramBindings: EmbedBindings
   displayTitle: string | null
   hostData: unknown
+  /** Render without the card frame, for hosts that already frame it (dashboard tiles). */
+  bare?: boolean
+  /** Re-runs the artifact whenever it changes. */
+  refreshToken?: number
+  onRunningChange?: (running: boolean) => void
 }
 
-/** One embed rendered against a host record. Also used by the configurator preview. */
-export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitle, hostData }: EmbedCardProps) {
+/**
+ * One embed rendered against a host record. Also used by the configurator
+ * preview and the home-dashboard "Report" widget.
+ */
+export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitle, hostData, bare = false, refreshToken = 0, onRunningChange }: EmbedCardProps) {
   const t = useT()
   const tRef = React.useRef(t)
   React.useEffect(() => { tRef.current = t }, [t])
+  const onRunningChangeRef = React.useRef(onRunningChange)
+  React.useEffect(() => { onRunningChangeRef.current = onRunningChange }, [onRunningChange])
 
   const params = React.useMemo(() => resolveEmbedParams(paramBindings, hostData), [paramBindings, hostData])
   const paramsKey = JSON.stringify(params)
@@ -237,6 +253,7 @@ export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitl
     let cancelled = false
     async function run() {
       setIsRunning(true)
+      onRunningChangeRef.current?.(true)
       setRunError(null)
       const url = artifactType === 'dashboard'
         ? `/api/reports/dashboards/${encodeURIComponent(artifactId)}/run`
@@ -260,12 +277,15 @@ export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitl
         if (cancelled) return
         setRunError(err instanceof Error ? err.message : tRef.current('reports.embed.error.run', 'Failed to render embed.'))
       } finally {
-        if (!cancelled) setIsRunning(false)
+        if (!cancelled) {
+          setIsRunning(false)
+          onRunningChangeRef.current?.(false)
+        }
       }
     }
     run()
     return () => { cancelled = true }
-  }, [artifactId, artifactType, paramsKey])
+  }, [artifactId, artifactType, paramsKey, refreshToken])
 
   const title = displayTitle || artifactName || t('reports.embed.fallbackTitle', 'Embedded report')
   const openHref = artifactType === 'dashboard'
@@ -273,7 +293,7 @@ export function EmbedCard({ artifactType, artifactId, paramBindings, displayTitl
     : `/backend/reports/${encodeURIComponent(artifactId)}`
 
   return (
-    <article className="rounded-md border border-border bg-card p-4">
+    <article className={bare ? undefined : 'rounded-md border border-border bg-card p-4'}>
       <header className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
         <Link href={openHref} className="text-xs text-muted-foreground hover:text-foreground hover:underline">

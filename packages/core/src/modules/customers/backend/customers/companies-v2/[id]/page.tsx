@@ -478,6 +478,8 @@ export default function CompanyDetailV2Page({ params }: { params?: { id?: string
             onDataReload={() => { loadData().catch((err) => logger.warn('onDataReload failed', { component: 'companies-v2', err })) }}
           />
 
+          <InjectionSpot spotId="detail:customers.company:after-header" context={injectionContext} data={data} />
+
           {/* KPI bar — always visible above zones */}
           <CompanyKpiBar data={data} canViewDeals={typeof data.kpis?.activeDealsCount === 'number'} />
 

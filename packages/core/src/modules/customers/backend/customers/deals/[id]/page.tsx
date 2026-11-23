@@ -671,6 +671,8 @@ export default function DealDetailPage({ params }: { params?: { id?: string } })
             />
           </section>
 
+          <InjectionSpot spotId="detail:customers.deal:after-header" context={injectionContext} data={data} />
+
           <CustomerDetailSidebar spotId={extensionPoints.hosts.dealSidebar.spotId} context={injectionContext} data={data} onDataChange={setData} disabled={isSaving}>
           <DealDetailTabs
             isLoadingInjectedTabs={injectedTabsLoading}
