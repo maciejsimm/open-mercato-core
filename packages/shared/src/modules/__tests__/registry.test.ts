@@ -17,6 +17,7 @@ import {
   getFrontendRouteManifests,
   resolvePageRouteMetadata,
 } from '../registry'
+import { resolveDeclaredPageRouteMetadata } from '../pageRouteMetadata'
 import {
   getMatchedApiRoutePath,
   resolveApiInterceptorRoutePath,
@@ -430,12 +431,21 @@ describe('resolvePageRouteMetadata', () => {
       order: 20,
       priority: 3,
       navHidden: false,
+      pageParent: undefined,
       visible: undefined,
       enabled: undefined,
       breadcrumb: [{ label: 'Orders' }],
       pageContext: 'main',
       placement: undefined,
     })
+  })
+
+  it('carries pageParent into the manifest, including the explicit null opt-out', () => {
+    expect(resolvePageRouteMetadata('/backend/reports/dashboards', { pageParent: null }).pageParent).toBeNull()
+    expect(
+      resolvePageRouteMetadata('/backend/reports/embeds', { pageParent: '/backend/reports/dashboards' }).pageParent,
+    ).toBe('/backend/reports/dashboards')
+    expect(resolveDeclaredPageRouteMetadata({ pageParent: null })).toEqual({ pageParent: null })
   })
 })
 

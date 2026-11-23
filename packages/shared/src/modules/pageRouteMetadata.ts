@@ -30,6 +30,7 @@ export function resolvePageRouteMetadata(pattern: string, metadata: PageMetadata
     order: metadata?.pageOrder ?? metadata?.order,
     priority: metadata?.pagePriority ?? metadata?.priority,
     navHidden: metadata?.navHidden,
+    pageParent: metadata?.pageParent,
     visible: metadata?.visible,
     enabled: metadata?.enabled,
     breadcrumb: metadata?.breadcrumb,

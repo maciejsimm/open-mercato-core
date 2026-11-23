@@ -1,6 +1,6 @@
 # Reports & Analytics Module
 
-> **Status:** Drafted in full. Open Questions resolved 2026-05-15. Ready for implementation review.
+> **Status:** Phases 1–5 implemented (with gaps). Post-rebase implementation review 2026-11-23 found blocking defects — see [Implementation Review — 2026-11-23](#implementation-review--2026-11-23) and [Phase 6](#phase-6--remediation-post-rebase-review). Open Questions Q8–Q11 and Q16 gate Phase 6; Q12–Q15 gate Phase 7 (AI-assisted authoring, proposed).
 
 ## TLDR
 
@@ -25,6 +25,26 @@
 - Field-level RBAC must hold under aggregation → resolved: aggregate path executes only after field-ACL filtering and refuses measures over redacted fields with HTTP 403.
 - Heavy pivot/group-by over `entity_indexes` → resolved: bounded in-memory aggregation (`OM_REPORTS_INMEMORY_CAP`, default 25 000 rows); over-cap auto-dispatches to async worker with notification on completion.
 - New auto-discovery file `<module>/reports.ts` extends the **platform extensibility contract** (`BACKWARD_COMPATIBILITY.md`) → handled as additive-only with generator-level discovery, no FROZEN surface modified.
+
+## Open Questions — Phase 6 remediation (2026-11-23)
+
+> Gate for [Phase 6](#phase-6--remediation-post-rebase-review). Q1–Q7 were resolved 2026-05-15 (see Changelog).
+
+- **Q8 — Aggregation fix (F1):** (a) implement the spec as written: page through `QueryEngine.query()` until `OM_REPORTS_INMEMORY_CAP`, keep Postgres-side aggregation in a separate follow-up spec; or (b) pull Postgres-side aggregation (`QueryEngine` `aggregate` option) into Phase 6?
+- **Q9 — Schedule / export execution identity (F3):** (a) run as the **schedule owner** with live ACL (fail + notify if the owner lost access; external-email recipients require `reports.admin`); or (b) run **per recipient** with each recipient's own ACL (external-email recipients disallowed)?
+- **Q10 — Unfinished Phase 3/4 steps (3.6b XLSX, 4.3 email, 4.5 async delivery):** (a) finish them in Phase 6; or (b) hide schedules / async / XLSX behind a feature toggle and ship the rest first, finishing them in a follow-up?
+- **Q11 — Overlap with the existing `<module>/analytics.ts` registry (F9):** (a) document coexistence now and write a convergence follow-up spec; or (b) converge in Phase 6 (derive one registry from the other)?
+
+**Gate for [Phase 7 — AI-assisted report authoring](#ai-assisted-report-authoring-proposed-2026-11-23):**
+
+- **Q12 — Spec split:** AI authoring can ship independently of the remediation work. (a) Move it into its own spec (`2026-11-23-reports-ai-authoring.md`) that references this one; or (b) keep it here as Phase 7?
+- **Q13 — How the agent's work becomes a report:** (a) **read-only agent** that builds a draft and hands it to the builder, where the user reviews and saves (no mutation tool, works with the platform's read-only-by-default policy); (b) agent saves directly through a `reports.create_report` mutation tool behind the approval card (needs a per-tenant mutation-policy override); or (c) (a) by default, with (b) available once a tenant enables it? Recommended: (c).
+- **Q14 — Where the agent lives:** (a) a dedicated `reports.report_builder` agent embedded on the Reports list and in the builder; or (b) the same, and also reachable from the global AI launcher?
+- **Q15 — "Before today" filters:** (a) add a `relative_date` filter kind (`field`, `op`, `anchor: today|now`, `offset`); or (b) add one-sided `date_range` tokens such as `before_today` / `after_today`? Recommended: (a).
+
+**Gate for Phase 6 step 18 (F19 formatting):**
+
+- **Q16 — Formatting control:** (a) dataset-declared defaults plus viewer locale only; or (b) also per-report column overrides in the builder (precision, date style, percent, compact), stored as `columnFormats` in the definition? Recommended: (b), limited to that small set.
 
 ---
 
@@ -1118,6 +1138,43 @@ Behaviour:
 
 ---
 
+## AI-Assisted Report Authoring (proposed, 2026-11-23)
+
+> Skeleton. Gated by Q12–Q15. Built on the platform AI framework (`defineAiAgent`, `defineAiTool`, `prepareMutation`, `<AiChat>`); see `packages/ai-assistant/AGENTS.md` and `.ai/skills/om-create-ai-agent/SKILL.md`.
+
+**Goal.** A user types *"create a report showing me overdue deals"* and gets a working report: the right dataset, fields, filters and type. They can see the result and adjust it before saving. The agent writes the same `ReportDefinition` the builder writes. There is no new query path and no SQL.
+
+**Worked example.** "Overdue deals" resolves to the `customers.deals` dataset as a `flat_list` of `title`, `pipeline_stage`, `value_amount`, `owner_user_id` and `expected_close_at`. The filters are `status = open` and `expected_close_at < today`, sorted by `expected_close_at asc`. The second filter must stay relative, so a saved report still shows overdue deals next month. The current DSL can't express that (see Q15). This is the one DSL change the feature needs.
+
+**Agent.** `reports.report_builder` in `reports/ai-agents.ts`, chat mode, `requiredFeatures: ['reports.author']`.
+
+| Tool | Kind | Purpose |
+|------|------|---------|
+| `reports.list_datasets` | read | Datasets visible to the caller (`loadDataset` ACL), with translated label, description and AI hints. |
+| `reports.describe_dataset` | read | Fields after field-ACL redaction: kind, enum options, allowed aggregations, joins. The agent cannot pick a field the user cannot see. |
+| `reports.validate_definition` | read | Runs the builder's save validator (`reportDefinitionSchema` + `validateDefinitionAgainstAcl`) and returns structured errors, so the model corrects itself instead of guessing. |
+| `reports.preview_definition` | read | Executes with `limit: 10` **as the calling user**. Returns row count and column list to the model. The rows themselves are shown in the chat through a client-rendered UI part (`reports:definition-preview`) that calls `/api/reports/preview`, so **tenant data never enters model context**. |
+| `reports.list_target_folders` | read | Folders where the caller has edit rights (`canEditFolder`). |
+| `reports.create_report` | mutation (Q13 b/c) | `prepareMutation` → existing `reports.report.create` command. The approval card shows name, dataset, type, columns and filters in plain language. |
+
+**Handoff (Q13 a).** The final answer carries an **Open in builder** action, which opens the builder with the draft definition loaded and not yet saved. The user saves through the normal path. The same agent embedded in the builder (`resolvePageContext` = current draft) can apply edits like "group by owner" or "add a chart" as a patch to the draft.
+
+**Dataset AI hints (additive DSL change).** Optional `aiHints?: string[]` on `Dataset` and `description` on fields carry domain meaning the model can't infer. Example: *"overdue = status open and expected_close_at before today"*, *"value_amount is in value_currency; don't sum across currencies"*. The owning module writes these in its `reports.ts`, and they are surfaced only through `describe_dataset`.
+
+**Guardrails.**
+- The only path to a saved report is the existing validator and `reports.report.create` command. Field ACL, folder ACL and the mutation guards apply unchanged.
+- Row values from previews never reach the model. That removes the data-exfiltration path and limits prompt injection through record content.
+- Unknown field keys or invalid combinations fail at `validate_definition`, never at run time. The agent may retry a few times (agent loop budget), then asks the user to clarify.
+- Ambiguous requests get a clarifying question instead of a guess. Example: *"overdue by expected close date or by next activity?"*
+- Model provider and keys follow the standard `OM_AI_REPORTS_MODEL` resolution.
+
+**Depends on Phase 6.** F1 (aggregation correctness), F13 (unified measure alias and chart validity) and F12 (draft model) must land first, or the agent will preview and hand off reports that are wrong or that the builder mangles.
+
+**Testing.**
+- Tool unit tests: ACL redaction in `describe_dataset`; the validator round-trip; `preview_definition` never returns row values to the model.
+- Agent eval cases run with recorded model responses (`agent-eval-ci`): overdue deals, revenue by month (chart), top 10 customers by order value (grouped + limit), and a request naming a field the user cannot see (must refuse).
+- Integration (Playwright): Reports list → Ask AI → prompt → preview renders → Open in builder → save → report runs; plus, when Q13 (b)/(c) is enabled, the approval-card path.
+
 ## Implementation Plan
 
 Phased delivery; every phase ends in a working application. Each phase is broken into testable steps. Every step is committed independently.
@@ -1192,6 +1249,92 @@ Phased delivery; every phase ends in a working application. Each phase is broken
 5. Docs: `apps/docs/docs/framework/modules/reports.mdx` covering datasets-as-code, builder, scheduling, embedding, and the field-ACL contract.
 6. End-to-end Playwright tests per `.ai/qa/AGENTS.md` covering: build → save → schedule → email-arrives → embed-on-record.
 7. Boy-Scout DS sweep on any touched neighbouring pages (e.g. customers detail page where the embed lives).
+
+### Phase 6 — Remediation (post-rebase review)
+
+**Goal:** close the defects in [Implementation Review — 2026-11-23](#implementation-review--2026-11-23) so execution results are correct and ACL holds on every path. Steps are a skeleton; each is finalised after Q8–Q11 are answered. Every step lands with a regression test that fails on the current code.
+
+1. **F1 — Aggregation over the full result set.** Per Q8: either page `QueryEngine.query()` (`pageSize ≤ 100`) until `cap`, setting `meta.truncated` when `total > cap`, or route grouped/pivot/chart/summary through Postgres-side aggregation. Regression test: 250 rows, `cap = 25 000` → `sum`/`count` cover all 250.
+2. **F6 — Real row-count probe.** Replace `shouldDispatchAsync(0, …)` with the spec's `pageSize: 1` `total` probe, so over-cap reports dispatch async.
+3. **F2 — Role shares match role IDs.** Build `FolderAclContext.roleIds` from server-resolved role IDs (RBAC/user-role lookup), never from the JWT `roles` claim (role names). Applies to every route plus `commands/shared.ts`. Test: user holding role X sees a folder shared with role X's UUID.
+4. **F4 — Shared feature matching.** Replace the hand-rolled wildcard matchers in `lib/folder-acl.ts` and `lib/field-redact.ts` with the shared feature-policy helpers (`authorizeFeatures` / `matchFeature`), so disabled/nulled features deny before wildcard grants.
+5. **F3 — Execution identity for schedules and exports.** Per Q9: drop `userFeatures: ['*']` from `workers/reports-schedule-execute.ts` and `workers/reports-export-build.ts`; resolve live ACL for the chosen principal and fail closed (`FieldAclDeniedError` → failure count + owner notification).
+6. **F7 — Row-level RBAC pass-through.** Pass `userId` / `userFeatures` into `QueryOptions` from `translateFlatList` / `buildAggregationQueryOptions`, as the RBAC table above already claims.
+7. **F8 — Org scoping on list routes.** Fail closed (403 or empty) when `auth.orgId` is absent instead of dropping the `organizationId` filter (`api/reports`, `api/folders`, `api/dashboards`, `api/embeds`, `api/schedules`).
+8. **F5 — Migration snapshot + entity hygiene.** Add `migrations/.snapshot-open-mercato.json`; add `onCreate` to every `updated_at` property.
+9. **Unfinished steps (per Q10).** Either complete 3.6b / 4.3 / 4.5 or gate schedules, async run and XLSX behind a feature toggle with the UI hidden.
+10. **F9 — `analytics.ts` overlap (per Q11).** Either document coexistence in this spec plus a follow-up spec, or converge the registries.
+11. **F12 — Type switching keeps compatible state.**
+    - Replace `migrateDefinition` with an explicit mapping between equivalent slots: `fields`; `groupBy` ↔ pivot `rows` ↔ chart `groupBy`; `measures` ↔ pivot `value` (first measure) ↔ chart `measures`/`yFields`; `filters` always carried over; `sort` kept when its field still exists in the target.
+    - Also keep a per-type draft stash for the session, so A → B → A restores A exactly. Drop only what the target type cannot represent, and say what was dropped in a non-blocking notice.
+    - Pure function in `lib/definition-migrate.ts` with a unit test per type pair.
+12. **F13 — Chart preview works.**
+    - (a) Auto-add a new measure's alias to `yFields`, and auto-remove it when the measure is removed (respecting the single-series limit for pie/donut/scatter).
+    - (b) When `groupBy` is empty, treat `xField` as the implicit group key on both client and server, or require an X field in `groupBy`. Pick one rule and enforce it in the validator.
+    - (c) One shared `measureAlias` in `@open-mercato/shared/modules/reports/dsl`, used by the UI, the aggregator and the validator.
+    - (d) Show preview validation errors inline (field-level messages from the 400 body) instead of `console.debug`.
+    - Tests: validator ↔ aggregator alias parity for `cf:*` fields; a chart preview integration test.
+13. **F14 — Reliable drop targets.**
+    - Switch to pointer-based collision detection (`pointerWithin`, falling back to `rectIntersection`), resolving to the innermost zone under the pointer.
+    - Shrink the remove target to an explicit drop strip that is active only while dragging a chip, not the whole sidebar.
+    - Give chips stable ids (field key / measure alias) instead of indexes, and delete the `activeOverZone` workaround.
+    - Playwright test: drag a field into each zone of each type, including a zone that already has chips, plus chip reorder and chip removal.
+14. **F15 — Nav metadata pass-through.** Keep `pageParent` in `resolvePageRouteMetadata` (done, uncommitted). Add a nav test that builds the sidebar from the generated route manifest rather than raw route objects, so a metadata field dropped between page metadata and the manifest fails CI.
+15. **F16 — Dashboard view mode.**
+    - Open dashboards in **view mode** by default: tiles auto-run on load, rendered in the stored 12-column grid (`x/y/w/h`), with no composer chrome. An **Edit** action switches to the composer for users with `permission: 'edit'`, mirroring the report page's `viewMode`.
+    - Add the dashboard parameter bar (dashboard `parameters` → every tile, with per-tile binding overrides), an "Open report" drill-through per tile, and grid move/resize in edit mode.
+    - Allow the same report on more than one tile.
+    - Tests: viewer sees rendered tiles with no Run click; editor toggles view ↔ edit; a parameter change re-runs the tiles.
+16. **F17 — Embed configurator people can use.**
+    - Replace the free-text inputs with guided steps:
+      1. **Where:** pick a record page ("Customer — person", "Customer — company") from a host-spot registry built from the spots the record-embed host widget is actually injected into. The entity is derived from the spot, so there is no separate entity field.
+      2. **What:** pick a report or dashboard, filtered to artifacts the admin can view.
+      3. **Parameters:** one row per parameter the artifact declares (label, kind, required). For each, choose *From this record* (a picker of the host entity's fields, labelled) or *Fixed value* (a typed input by parameter kind). Required parameters left unbound block save.
+    - Show a live preview against a sample record of the chosen entity.
+    - The list page shows "Customer — company · Open deals · companyId ← Company ID" instead of raw ids.
+    - Validator: reject spot ids not in the registry and bindings to undeclared parameters.
+    - Tests: unknown spot is rejected; unbound required parameter blocks save; the embed renders on the person page with the bound value.
+17. **F18 — Sidebar structure.**
+    - Target order in the Reports group: **Reports** first, **Dashboards** second.
+    - Create pages (`new`, `dashboards/new`, `embeds/new`, `schedules/new`) are `navHidden: true` and reached from list-page actions only.
+    - **Embeds** and **Schedules** list pages are visible as children of **Reports** (`pageParent: '/backend/reports'`), so they appear when the Reports section is active.
+    - Verify the nav's sort precedence (`pagePriority` vs `pageOrder`) and set values to match. Run `yarn mercato configs cache structural --all-tenants` after the change.
+    - Test: a nav snapshot for a user with `reports.*` from a non-reports page and from `/backend/reports`.
+18. **F19 — Field formatting.** One formatting contract, applied everywhere a value is shown.
+    - **Kind-driven defaults**, from the dataset field's `kind` and the viewer's locale and timezone:
+      - `date`: locale date, no time and no timezone shift.
+      - `datetime`: locale date and time in the viewer's timezone (schedules and emails use the schedule's `timezone`).
+      - `integer` / `float`: locale separators; floats default to 2 decimals.
+      - `money`: currency symbol and that currency's minor units (`currencyPrecision` / `isoCurrencyMinorUnits`), exact decimal math via `@open-mercato/shared/lib/decimal`.
+      - `boolean`: translated Yes/No.
+      - `enum`: the option's `labelKey` or dictionary label; the raw key only as a fallback.
+      - `fk`: the related record's label (resolved through the dataset join or a label resolver), the UUID only as a fallback.
+      - `null`: "—".
+    - **DSL additions (additive):**
+      - `currencyField` on `money` fields names the column holding the row's currency, mirroring `AnalyticsEntityTypeConfig.currencyField`.
+      - Optional field-level `format` defaults: `precision`, `dateStyle`, `percent`, `compact`.
+      - Optional per-report `columnFormats: Record<columnKey, ColumnFormat>` overrides, per Q16.
+    - **Measures inherit formatting:** `sum`/`min`/`max`/`avg` keep the source field's kind and currency; `count`/`count_distinct` are integers; `avg` of an integer is a float.
+    - **Mixed currencies:** a money measure over rows with more than one currency is split by currency, or flagged in the result `meta`, never silently summed.
+    - **One formatter.** `formatReportValue(value, column, { locale, timeZone })` in `reports/lib/format.ts` is used by the result table, pivot cells, chart axes, tooltips and legends, dashboard tiles, embeds, and the email/Markdown output.
+    - **Exports stay machine-readable.** CSV and JSON carry raw typed values (ISO dates, plain decimals, plus a currency column). XLSX writes typed cells with number and date formats, so spreadsheets can still compute.
+    - **Execution `meta`** returns a column descriptor per output column (`key`, `label`, `kind`, `currency?`, `format?`), so clients never guess a column's type from its values.
+    - **Tests:** formatter unit tests per kind and locale (en, de, pl); timezone boundaries for `datetime`; a mixed-currency sum; and an integration test asserting a money column renders with a currency symbol in the table and in an exported XLSX cell format.
+19. **Coverage.** Expand `TC-REPORTS-001` into the e2e suites listed under Testing Strategy, plus an aggregation-correctness integration test (> 100 rows) and a role-share integration test. Translate the reports keys in de/es/pl/ko (about 68% are still English copies; `ko` is all placeholders).
+
+### Phase 7 — AI-assisted report authoring (proposed)
+
+**Goal:** natural-language report creation per [AI-Assisted Report Authoring](#ai-assisted-report-authoring-proposed-2026-11-23). Skeleton; finalised after Q12–Q15. Requires Phase 6 steps 1, 11 and 12.
+
+1. DSL: relative-date filter (per Q15), plus optional `aiHints` on `Dataset`. Additive only; validator, translator and builder UI updated; unit tests.
+2. Seed AI hints and field descriptions in `customers/reports.ts`, `sales/reports.ts` and `catalog/reports.ts`.
+3. Read tools: `list_datasets`, `describe_dataset`, `validate_definition`, `preview_definition`, `list_target_folders` (`reports/ai-tools/`), each with `requiredFeatures` and unit tests.
+4. `reports:definition-preview` UI part (client-side preview fetch, no row data in model context).
+5. `reports.report_builder` agent definition, prompt and suggestions; `yarn generate`; playground smoke test.
+6. Builder handoff: open the builder with an unsaved draft; in-builder agent patches the draft through `resolvePageContext`.
+7. (Q13 b/c) `reports.create_report` mutation tool through `prepareMutation`, with a plain-language approval preview.
+8. Embed `<AiChat>` on the Reports list ("Ask AI") and in the builder; i18n keys for all locales.
+9. Agent evals and the Playwright suite listed under the section's Testing.
 
 ### File Manifest (excerpt)
 
@@ -1374,6 +1517,46 @@ None.
 
 ---
 
+## Implementation Review — 2026-11-23
+
+Branch rebased onto upstream `main` (0.6.1 base → current). Build, typecheck, unit tests and `i18n:check-sync` pass after the adaptations listed in the Changelog. The review compared the implementation with this spec and current platform rules.
+
+**Holds up:** reads go only through `QueryEngine` (no raw SQL); `translateFlatList` refuses to run without tenant/org; OR groups fail explicitly instead of being collapsed to AND; writes go through `makeCrudRoute` + commands, and the commands enforce folder/owner ACL on update, delete and move; the result-cache key includes the caller's feature fingerprint; datasets are discovered through the module-owned `generators.ts` plugin; the UI follows the design system.
+
+| ID | Severity | Finding | Spec vs. code | Location |
+|----|----------|---------|---------------|----------|
+| F1 | Critical | Grouped/pivot/chart/summary aggregate only the **first 100 rows**: one `page: 1, pageSize: min(cap, 100)` query, then in-memory aggregation. `truncated` (`rows ≥ cap`, cap 25 000) never fires, so wrong totals are silent. Unit tests use `cap: 3` and miss it. | Drift — spec says "paginated until cap" | `lib/execute.ts` `buildAggregationQueryOptions` |
+| F2 | High | Role-based folder shares never match: `roleIds` is built from the JWT `roles` claim, which holds role **names** (`auth/api/login.ts` `roles: userRoleNames`), while shares store role **UUIDs**. Unit tests build the context with IDs. | Drift | `lib/folder-acl.ts`, all `api/*` routes, `commands/shared.ts` |
+| F3 | High | Scheduled runs and export builds execute with `userFeatures: ['*']`. A `reports.schedule` holder can deliver fields they cannot see, to arbitrary email recipients, and revoked access is never re-checked. | Gap — spec never states the execution identity | `workers/reports-schedule-execute.ts`, `workers/reports-export-build.ts` |
+| F4 | High | Hand-rolled wildcard feature matching skips the platform policy order (disabled/nulled features deny first). | Platform rule violation | `lib/folder-acl.ts`, `lib/field-redact.ts` |
+| F5 | High | No `migrations/.snapshot-open-mercato.json`; `updated_at` lacks `onCreate`. | Platform rule violation | `migrations/`, `data/entities.ts` |
+| F6 | Medium | Async dispatch never triggers on size: `shouldDispatchAsync(0, …)` always gets estimate 0. | Drift — spec defines a `pageSize: 1` probe | `api/reports/[id]/run/route.ts` |
+| F7 | Medium | The row-level RBAC layer claimed in the RBAC table is not wired: no `userId`/`userFeatures` passed to `QueryOptions`. | Drift | `lib/query-translator.ts`, `lib/execute.ts` |
+| F8 | Medium | List routes use `organizationId: auth.orgId ?? undefined`; a missing org drops the filter and widens to the whole tenant. | Tenant-isolation hardening | `api/reports`, `api/folders`, `api/dashboards`, `api/embeds`, `api/schedules` |
+| F9 | Medium | An `analytics.ts` registry (`@open-mercato/shared/modules/analytics`, used by dashboard widgets) predates this spec and declares overlapping entities (sales, customers, catalog). Not mentioned under Alternatives Considered. | Gap | `packages/shared/src/modules/analytics.ts` |
+| F10 | Medium | Steps 3.6b (XLSX), 4.3 (schedule email) and 4.5 (async result delivery) are not implemented, but the schedule UI ships. Schedules build exports that nobody receives. | Incomplete | `PLAN.md` |
+| F11 | Low | e2e coverage is 4 smoke tests vs. the 5 suites in Testing Strategy; translations are mostly EN copies; the builder page is 3 223 lines. | — | `__integration__/`, `i18n/`, `backend/reports/[id]/page.tsx` |
+
+### Builder UX defects (user-reported, 2026-11-23)
+
+Reported during local testing. Root causes come from reading the code in `backend/reports/[id]/page.tsx` (the builder page).
+
+| ID | Severity | Symptom | Root cause | Location |
+|----|----------|---------|------------|----------|
+| F12 | High | Switching report type in the editor drops fields and measures, even when the target type could keep them. | `migrateDefinition` carries over only `fields`, and only between `flat_list` ↔ `grouped`. Every other switch returns `defaultDefinition(nextType)`, which also wipes `filters`, `sort`, `groupBy`, `measures` and the pivot `rows`/`cols`/`value`. There is no per-type stash, so A → B → A cannot restore the original. | `migrateDefinition` (~L320) |
+| F13 | High | Chart preview never renders. | Four separate causes. **(a)** Adding a measure does not add its alias to `chart.yFields`, but the server validator requires `yFields.min(1)`. The preview gets a 400, which is swallowed by `console.debug`. **(b)** With no `groupBy`, the X axis can be any categorical field, but the server aggregates with `groupBy ?? []`. That yields one row with no X value, so the chart is empty. `xField` is never folded into `groupBy`. **(c)** Three different measure-alias rules: UI `measureAlias` and `lib/aggregator.ts` sanitize the field name (the aggregator also special-cases `count`), but `data/validators.ts` uses `${aggregation}_${field}` raw. For `cf:*` or other non-alphanumeric fields, valid Y series get rejected. **(d)** Preview failures give no user feedback. | `page.tsx` chart editor (~L2200) + preview effect (~L860); `data/validators.ts` chart `superRefine`; `lib/execute.ts` chart branch |
+| F14 | Medium | Dropping a field onto a zone works only some of the time. | `DndContext` uses `collisionDetection={closestCenter}`, which picks the droppable whose **center** is nearest the dragged item's, not the zone under the pointer. All droppables compete: every zone, every chip, and the whole sidebar, which is registered as `zone:__remove__` and contains the drag sources. A drop inside a large zone often resolves to a closer chip in another zone, or to `__remove__`, where a sidebar-field drop is a silent no-op. Chip ids are index-based (`chip:<zone>:<idx>`), so they go stale after a reorder. The `activeOverZone` highlight workaround hides the mismatch: the zone lights up, but `over` is somewhere else. | `DndContext` (~L961), `handleDragEnd` (~L670), `Zone` (~L1554) |
+
+| F15 | Medium | Outside `/backend/reports`, **Dashboards** (and Embeds / Schedules) are missing from the main sidebar. Only **Reports** shows. | `pageParent` is honoured by `buildAdminNav`, but upstream's `resolvePageRouteMetadata` (`packages/shared/src/modules/pageRouteMetadata.ts`, which builds `backend-routes.generated.ts`) copies metadata field by field and drops `pageParent`. Dashboards (`pageParent: null`) then falls back to URL-prefix nesting under `/backend/reports` and only appears when that section is expanded. Rebase gap: the function was added upstream after the branch was cut. **Already fixed (uncommitted, 2026-11-23):** one-line pass-through plus a unit test covering the `null` opt-out. | `packages/shared/src/modules/pageRouteMetadata.ts` |
+| F16 | High | Dashboards have no view mode. Opening a dashboard always shows the composer (metadata form, add-tile panel, editable tile titles) and every tile reads "Click Run to render this tile". | Gaps against Mockup 4: **(a)** No view/edit split like the report page's `viewMode` (`edit` / `run`). Viewers with `permission: 'view'` get a disabled composer instead of a dashboard. **(b)** No auto-run on open, so tiles render only after a manual Run. **(c)** Tile `x/y/w/h` and `grid` (12 cols) are stored in `layout_json` but never rendered: tiles stack as a vertical list. **(d)** No dashboard parameter bar: Run always posts `params: {}`, so shared/date-range parameters cannot propagate to tiles. **(e)** No per-tile "Open report" drill-through. **(f)** A report can be added only once (`usedReportIds` filter), which rules out the same report under different tile bindings. | `backend/reports/dashboards/[id]/page.tsx` |
+| F17 | High | The New Embed form is not understandable for an admin. It asks for raw "Host spot id" and "Host entity id" strings and a free-text "Record-field bindings" box (`companyId = id, ownerId = ownerUserId`). | Implementation fell short of Mockup 5. **(a)** Spot and entity are free-text inputs, not pickers. Only two spots actually render embeds (`detail:customers.person:after-header` and `detail:customers.company:after-header`, from `widgets/injection-table.ts`), so any other value saves without error and never shows. **(b)** Bindings are a comma-separated string parsed client-side (`parseRecordFieldBindings`). The admin has to know the report's parameter keys and the host record's field names, and there is no `literal` source, which the mockup has. **(c)** No preview of where the embed appears or what it renders. **(d)** The list page shows raw ids instead of human labels. | `backend/reports/embeds/new/page.tsx`, `backend/reports/embeds/page.tsx`, `widgets/injection-table.ts` |
+| F18 | Medium | Sidebar structure is wrong: **Dashboards** sits above **Reports**; "New Embed" and "New Schedule" appear under Dashboards; "New Report" appears under Reports; the Embeds and Schedules list pages are not in the sidebar at all. | Page metadata is inverted. The list pages `embeds/page.meta.ts` and `schedules/page.meta.ts` are `navHidden: true`, while the create pages `embeds/new` and `schedules/new` are visible with `pageParent: '/backend/reports/dashboards'`. `new/page.meta.ts` is not hidden. Reports (`pageOrder: 100`) still renders below Dashboards (`pageOrder: 110`), so the sort precedence the nav applies within a group must be checked, not assumed. | `backend/**/page.meta.ts` |
+| F19 | High | Values are shown unformatted: dates and times as raw ISO strings, numbers without locale separators or fixed precision, money with no currency symbol or precision, booleans as `true`/`false`, enum values as raw keys (`open`) instead of their labels, and related records (`fk`) as UUIDs. | No formatting layer exists. The result table renders `String(value)` (or `JSON.stringify` for objects). Charts, dashboard tiles and embeds pass raw values through. The DSL has field `kind` (`date`, `datetime`, `money`, `enum` with `labelKey` options, `fk` with `joinTo`), but nothing consumes it for display. `money` fields carry no link to their currency column, so a currency-correct display (or a refusal to sum mixed currencies) isn't possible. Aggregated columns (`sum_value_amount`) lose the source field's kind. | `backend/reports/[id]/page.tsx` result table (~L3207), `widgets/ReportChart.tsx`, `lib/export.ts`, `packages/shared/src/modules/reports/dsl.ts` |
+
+Remediation is planned in [Phase 6](#phase-6--remediation-post-rebase-review). The Review — 2026-05-15 verdict ("Approved") is superseded until Phase 6 lands.
+
+---
+
 ## Changelog
 
 ### 2026-05-15
@@ -1394,3 +1577,12 @@ None.
 - **Commands:** Passed — 18 commands, all undoable except `reports.execution.run` (read-only by nature); side-effect emission specified.
 - **Risks:** Passed — 6 explicit scenarios with severity/mitigation/residual; no high-severity item left unmitigated.
 - **Verdict:** Approved.
+
+### 2026-11-23
+- Rebased onto upstream `main`. Adaptations: dataset discovery stays on the module-owned `generators.ts` plugin (upstream generator refactor); HybridQE decryption fallback dropped (already upstream); `LegacyColumnDef` from `@tanstack/react-table/legacy` (TanStack v9); `ko` locale added with EN placeholders; `reports` added to the create-app template `modules.ts`.
+- Implementation review recorded (F1–F11). Phase 6 (Remediation) skeleton added. Open Questions Q8–Q11 raised; they gate Phase 6.
+- Builder UX defects F12 (type switch loses state), F13 (chart preview never renders), F14 (unreliable drop targets) recorded with root causes; Phase 6 steps 11–13 added.
+- F15 (Dashboards missing from sidebar outside Reports — `pageParent` dropped by `resolvePageRouteMetadata`; fixed, uncommitted) and F16 (dashboards lack view mode, grid layout, parameters, drill-through) recorded; Phase 6 steps 14–15 added.
+- Proposed AI-assisted report authoring (`reports.report_builder` agent, read tools, client-rendered preview UI part, builder handoff, optional approval-gated create tool, relative-date DSL gap). Added as a section + Phase 7 skeleton; Open Questions Q12–Q15 raised.
+- F17 (embed configurator: free-text spot/entity ids and binding string → guided picker with parameter rows and preview) and F18 (sidebar: Reports above Dashboards, hide create pages, show Embeds/Schedules under Reports) recorded; Phase 6 steps 16–17 added.
+- F19 (no value formatting: dates, numbers, money, enums, FKs shown raw) recorded; Phase 6 step 18 adds kind-driven formatting, `currencyField`, measure kind inheritance, mixed-currency handling, one shared formatter, typed exports and column descriptors. Q16 raised.
